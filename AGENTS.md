@@ -1,5 +1,7 @@
 ## Contribution workflow
 
+This workflow takes precedence over branching, review, and merge instructions in agent skills.
+
 1. Start each change in a dedicated Git worktree on its own branch based on `origin/main`. Commit and push changes on that branch.
 2. Use Matt Pocock's `pr` skill to write the pull request description. Open the pull request against `main` and include evidence from the checks you ran.
 3. Run the `code-review` skill on the pull request diff against its base. Resolve blocking findings, verify the final revision with the applicable tests or checks, and record the results in the pull request.
