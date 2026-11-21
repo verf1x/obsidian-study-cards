@@ -18,7 +18,7 @@ interface Snapshot extends Revision { checksum: string }
 interface PendingWrite {
   snapshot: Snapshot;
   base: string | null;
-  retryable: boolean;
+  notApplied: boolean;
   beforeImport: Snapshot | null;
 }
 
@@ -28,12 +28,15 @@ interface DeviceState {
   head: Snapshot | null;
   branches: Snapshot[];
   pending: PendingWrite | null;
-  uncertain: PendingWrite | null;
+  uncertain: PendingWrite[];
   migration: Snapshot | null;
   legacy: unknown;
   damaged: string | null;
   beforeImport: Snapshot | null;
 }
+
+// Adapters use this error only when they can establish that publication did not start.
+export class SharedWriteNotApplied extends Error {}
 
 export interface StudyStorageIO {
   readShared(): Promise<string | null>;
@@ -122,7 +125,7 @@ async function backup(value: unknown) {
 async function pendingWrite(value: unknown): Promise<PendingWrite | null> {
   if (!record(value) || (value.base !== null && typeof value.base !== "string")) return null;
   const [snapshot, beforeImport] = await Promise.all([backup(value.snapshot), backup(value.beforeImport)]);
-  return snapshot && { snapshot, base: value.base, retryable: value.retryable === true, beforeImport };
+  return snapshot && { snapshot, base: value.base, notApplied: value.notApplied === true, beforeImport };
 }
 
 const serialize = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
@@ -161,7 +164,7 @@ function operationFailed(error: unknown) {
 export class StudyStorage {
   private queue = Promise.resolve<unknown>(undefined);
   private raw: string | null | undefined;
-  private awaitingCheckpoint = false;
+  private mustVerifyPending = false;
   private current: StorageState = { revision: null, token: 0, data: emptyStudyData(), problem: null };
   private readonly imports = new WeakMap<ImportPreview, { snapshot: Snapshot; id: string }>();
 
@@ -171,13 +174,16 @@ export class StudyStorage {
     const local = await io.readDevice();
     const saved = record(local) ? local : {};
     const [head, pending, uncertain, migration, beforeImport, branches] = await Promise.all([
-      backup(saved.head), pendingWrite(saved.pending), pendingWrite(saved.uncertain), backup(saved.migration), backup(saved.beforeImport),
+      backup(saved.head), pendingWrite(saved.pending),
+      Promise.all((Array.isArray(saved.uncertain) ? saved.uncertain : [saved.uncertain]).map(pendingWrite)),
+      backup(saved.migration), backup(saved.beforeImport),
       Promise.all((Array.isArray(saved.branches) ? saved.branches : []).map(backup)),
     ]);
     const device: DeviceState = {
       known: saved.known === true || saved.head != null,
       activeSection: typeof saved.activeSection === "string" ? saved.activeSection : null,
-      head, pending, uncertain, migration, beforeImport,
+      head, pending, migration, beforeImport,
+      uncertain: uncertain.filter((candidate) => candidate !== null),
       legacy: saved.legacy ?? null,
       damaged: typeof saved.damaged === "string" ? saved.damaged : null,
       branches: branches.filter((branch) => branch !== null),
@@ -298,8 +304,8 @@ export class StudyStorage {
       const selected = versions.find((item) => item.id === id);
       if (this.current.problem?.kind !== "conflict" || !selected) throw new StaleStudyState();
       const candidate = await this.makeRevision(this.newId(), "Выбор версии", selected.data, selected, versions);
-      const uncertain = this.device.uncertain;
-      await this.publish(candidate, uncertain?.snapshot.id === selected.id ? uncertain.beforeImport : null);
+      const uncertain = this.device.uncertain.find(({ snapshot }) => snapshot.id === selected.id);
+      await this.publish(candidate, uncertain?.beforeImport ?? null);
     });
   }
 
@@ -366,24 +372,28 @@ export class StudyStorage {
   }
 
   private async readLatest(startup = false) {
-    await this.observe(await this.io.readShared(), startup || this.awaitingCheckpoint);
+    await this.observe(await this.io.readShared(), startup || this.mustVerifyPending);
   }
 
   private availableVersions(device: DeviceState) {
     const { head, branches, migration, uncertain } = device;
-    return [...new Map([head, ...branches, migration, uncertain?.snapshot ?? null]
+    return [...new Map([head, ...branches, migration, ...uncertain.map(({ snapshot }) => snapshot)]
       .filter((item) => item !== null).map((item) => [item.id, item])).values()];
   }
 
   private async settlePending(device: DeviceState, incoming: Snapshot | null, raw: string | null, interrupted: boolean) {
     let next = device;
     const { pending, uncertain, migration } = next;
-    if (incoming && uncertain) {
-      const id = uncertain.snapshot.id;
-      if (includesRevision(incoming, id) || incoming.superseded.includes(id)) {
-        next = { ...next, uncertain: null,
-          beforeImport: includesRevision(incoming, id) ? uncertain.beforeImport ?? next.beforeImport : next.beforeImport };
-      }
+    if (incoming && uncertain.length) {
+      let beforeImport = next.beforeImport;
+      const remaining = uncertain.filter(({ snapshot, beforeImport: copy }) => {
+        if (includesRevision(incoming, snapshot.id)) {
+          beforeImport = copy ?? beforeImport;
+          return false;
+        }
+        return !incoming.superseded.includes(snapshot.id);
+      });
+      next = { ...next, uncertain: remaining, beforeImport };
     }
     if (!pending) return next;
     const id = pending.snapshot.id;
@@ -393,9 +403,9 @@ export class StudyStorage {
     }
     // Only a matching shared version can confirm a write that was interrupted at the device checkpoint.
     // If sync changed the file before we could check, keep the tentative copy for an explicit choice.
-    if (!pending.retryable && migration?.id !== id
+    if (!pending.notApplied && migration?.id !== id
       && (interrupted || await fingerprint(raw) !== pending.base)) {
-      return { ...next, pending: null, uncertain: pending };
+      return { ...next, pending: null, uncertain: [...next.uncertain, pending] };
     }
     return next;
   }
@@ -438,11 +448,11 @@ export class StudyStorage {
         migration: null,
       };
     }
-    if (problem?.kind !== "unsupported" && (next.branches.length > 1 || next.uncertain)) {
+    if (problem?.kind !== "unsupported" && (next.branches.length > 1 || next.uncertain.length > 0)) {
       problem = {
         kind: "conflict",
         versions: this.availableVersions(next).map((item) => ({
-          ...summarize(item), unconfirmed: item.id === next.uncertain?.snapshot.id,
+          ...summarize(item), unconfirmed: next.uncertain.some(({ snapshot }) => snapshot.id === item.id),
         })),
         canStartEmpty: !next.head && !next.migration,
       };
@@ -450,31 +460,34 @@ export class StudyStorage {
 
     if (next !== this.device) await this.saveDevice(next);
     this.raw = raw;
-    this.awaitingCheckpoint = false;
+    this.mustVerifyPending = false;
     const head = next.head ?? next.migration;
     this.current = { revision: head?.id ?? null, token: this.current.token + 1, data: head?.data ?? emptyStudyData(), problem };
   }
 
   private async publish(snapshot: Snapshot, beforeImport: Snapshot | null = null) {
     const expected = this.raw ?? null;
-    const pending = { snapshot, base: await fingerprint(expected), retryable: false, beforeImport };
+    const pending = { snapshot, base: await fingerprint(expected), notApplied: false, beforeImport };
     try {
       await this.saveDevice({ ...this.device, pending });
       await this.io.writeShared(expected, serialize(snapshot));
     } catch (error) {
+      if (this.device.pending !== pending) throw operationFailed(error);
       try {
+        if (error instanceof SharedWriteNotApplied) {
+          await this.saveDevice({ ...this.device, pending: { ...pending, notApplied: true } });
+        } else {
+          this.mustVerifyPending = true;
+        }
         await this.readLatest();
         if (this.wasCommitted(snapshot.id)) return;
-        if (this.raw === expected && this.device.pending === pending) {
-          await this.saveDevice({ ...this.device, pending: { ...pending, retryable: true } });
-        }
       } catch {
         throw operationFailed(error);
       }
       if (this.raw !== expected && this.current.problem?.kind !== "recovery") throw new StaleStudyState();
       throw operationFailed(error);
     }
-    this.awaitingCheckpoint = true;
+    this.mustVerifyPending = true;
     try {
       await this.observe(serialize(snapshot));
     } catch (error) {

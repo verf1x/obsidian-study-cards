@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { StudyStorage, type StudyStorageIO } from "../src/study-storage";
+import { SharedWriteNotApplied, StudyStorage, type StudyStorageIO } from "../src/study-storage";
 
 function device(file: { raw: string | null }) {
   let local: unknown;
   let failCheckpoint = false;
+  let failRead = false;
   let write: ((apply: () => void) => void | Promise<void>) | undefined;
   const io: StudyStorageIO = {
-    async readShared() { return file.raw; },
+    async readShared() {
+      if (failRead) {
+        failRead = false;
+        throw new Error("shared file temporarily unavailable");
+      }
+      return file.raw;
+    },
     async writeShared(expected, next) {
       const apply = () => {
-        if (file.raw !== expected) throw new Error("changed");
+        if (file.raw !== expected) throw new SharedWriteNotApplied("changed");
         file.raw = next;
       };
       if (write) await write(apply);
@@ -30,6 +37,7 @@ function device(file: { raw: string | null }) {
     open: (legacy?: unknown) => StudyStorage.open(io, legacy, randomUUID),
     beforeWrite(hook?: typeof write) { write = hook; },
     failNextDeviceWrite() { failCheckpoint = true; },
+    failNextSharedRead() { failRead = true; },
   };
 }
 
@@ -45,7 +53,7 @@ test("повторяет прерванную миграцию и сохраня
     progress: { [uuid]: { history: [{ score: 3 }], schedule: { due: 15 } } },
   };
 
-  desktop.beforeWrite(() => { throw new Error("disk full"); });
+  desktop.beforeWrite(() => { throw new SharedWriteNotApplied("disk full"); });
   const interrupted = await desktop.open(legacy);
   assert.equal(file.raw, null);
   assert.equal(interrupted.state.problem?.kind, "recovery");
@@ -311,4 +319,67 @@ test("точная копия предшественника не скрывае
       assert.deepEqual(store.state.data.sections.map(({ name }) => name), ["Первая запись", "Прерванное подтверждение"]);
     });
   }
+});
+
+test("неопределённая запись остаётся доступной после ошибки подтверждения", async (t) => {
+  for (const readFails of [false, true]) {
+    await t.test(readFails ? "проверочный файл временно недоступен" : "предшественник уже доставлен", async () => {
+      const file = { raw: null as string | null };
+      const desktop = device(file);
+      const store = await desktop.open();
+      const add = (name: string) => store.commit({ id: randomUUID(), revision: store.state.revision, action: name },
+        (draft) => { draft.sections.push({ id: randomUUID(), name, sources: [] }); });
+      await add("Первое состояние");
+      const predecessor = file.raw;
+      desktop.beforeWrite((apply) => {
+        apply();
+        if (readFails) desktop.failNextSharedRead();
+        else file.raw = predecessor;
+        throw new Error("write response lost");
+      });
+      await assert.rejects(add("Запись без подтверждения"), /Повторите действие/);
+      file.raw = predecessor;
+      desktop.beforeWrite();
+      await store.refresh();
+      assert.equal(store.problem?.kind, "conflict");
+      await assert.rejects(add("Следующее изменение"), /Выберите рабочую версию/);
+      const issue = store.state.problem;
+      assert.equal(issue?.kind, "conflict");
+      const candidate = issue?.versions.find(({ action }) => action === "Запись без подтверждения");
+      assert.equal(candidate?.unconfirmed, true);
+      await store.choose(store.state.token, candidate!.id);
+      assert.deepEqual(store.state.data.sections.map(({ name }) => name), ["Первое состояние", "Запись без подтверждения"]);
+    });
+  }
+});
+
+test("при прерванном выборе сохраняет обе ранее доступные версии", async () => {
+  const file = { raw: null as string | null };
+  const desktop = device(file);
+  const storage = await desktop.open();
+  const add = (name: string) => storage.commit({
+    id: randomUUID(), revision: storage.state.revision, action: name,
+  }, (draft) => { draft.sections.push({ id: randomUUID(), name, sources: [] }); });
+  await add("Исходная версия");
+  const predecessor = file.raw;
+  desktop.beforeWrite((apply) => {
+    apply();
+    file.raw = predecessor;
+    throw new Error("write response lost");
+  });
+  await assert.rejects(add("Новая версия"), /Повторите действие/);
+  const initial = storage.state.problem;
+  assert.equal(initial?.kind, "conflict");
+  const selected = initial?.versions.find(({ action }) => action === "Новая версия");
+  await assert.rejects(storage.choose(storage.state.token, selected!.id), /Повторите действие/);
+
+  desktop.beforeWrite();
+  const afterRestart = await desktop.open();
+  const choices = afterRestart.state.problem;
+  assert.equal(choices?.kind, "conflict");
+  assert.deepEqual(choices?.versions.map(({ action }) => action).sort(),
+    ["Исходная версия", "Новая версия", "Выбор версии"].sort());
+  await afterRestart.choose(afterRestart.state.token, selected!.id);
+  assert.equal(afterRestart.problem, null);
+  assert.deepEqual(afterRestart.state.data.sections.map(({ name }) => name), ["Исходная версия", "Новая версия"]);
 });
