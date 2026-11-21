@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { IntervalSession } from "../src/interval-session";
 import { setInterfaceLanguage } from "../src/localization";
-import { StudyCards, type StudyVault } from "../src/study-cards";
+import { StudyCards, type SourceRequest, type StudyVault } from "../src/study-cards";
 
 import { SharedWriteNotApplied, StudyStorage, type StudyStorageIO } from "../src/study-storage";
 
@@ -201,36 +201,38 @@ test("a selection follows its note and question IDs while keeping review history
 test("reconnecting a missing source keeps each note's own question selection", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const oldPath = "First.md";
+  const oldPath = "Folder/First.md";
   const otherPath = "Other.md";
-  const movedPath = "Moved.md";
+  const movedPath = "First.md";
   const format = { mode: "collection", level: 2 } as const;
   await vault.files.create(oldPath, "## First\nFirst answer\n");
   await vault.files.create(otherPath, "## Other\nOther answer\n\n## Extra\nExtra answer\n");
   let study = await vault.open();
   const reconnectToOther = await study.addSection("Reconnect to another note");
   const reconnectToMoved = await study.addSection("Reconnect to the moved note");
-  async function connect(section: string, path: string, replaceSourceId?: string) {
-    const preview = study.preview(section, [{ kind: "file", path, format }], replaceSourceId);
+  async function connect(section: string, kind: SourceRequest["kind"], path: string, replaceSourceId?: string) {
+    const preview = study.preview(section, [{ kind, path, format }], replaceSourceId);
     await preview.refresh();
     assert.deepEqual(await preview.confirm(), { confirmed: true });
   }
+  await connect(reconnectToOther, "file", oldPath);
+  await connect(reconnectToMoved, "folder", "Folder");
   for (const section of [reconnectToOther, reconnectToMoved]) {
-    await connect(section, oldPath);
     await study.setNoteQuestions(section, oldPath, { selectedCardIds: [], expectedCardIds: null });
   }
-  await connect(reconnectToOther, otherPath);
+  await connect(reconnectToOther, "file", otherPath);
   const otherId = study.cards(reconnectToOther, "source")[0]!.id!;
   await study.setNoteQuestions(reconnectToOther, otherPath, { selectedCardIds: [otherId], expectedCardIds: null });
-  await vault.move(oldPath, movedPath);
+  await vault.move("Folder", "Moved");
+  await vault.move("Moved/First.md", movedPath);
 
   study = await vault.open();
   await study.scan();
-  await connect(reconnectToOther, otherPath, study.missingSources(reconnectToOther)[0]!.id);
-  await connect(reconnectToMoved, movedPath, study.missingSources(reconnectToMoved)[0]!.id);
+  await connect(reconnectToOther, "file", otherPath, study.missingSources(reconnectToOther)[0]!.id);
+  await connect(reconnectToMoved, "folder", "", study.missingSources(reconnectToMoved)[0]!.id);
   assert.deepEqual(study.cards(reconnectToOther).map(({ id }) => id), [otherId]);
   assert.deepEqual(study.noteQuestions(reconnectToMoved, movedPath)?.cardIds, []);
-  assert.deepEqual(study.cards(reconnectToMoved), []);
+  assert.equal(study.cards(reconnectToMoved).some(({ path }) => path === movedPath), false);
 });
 
 test("интервальная оценка сохраняет минутный срок и возвращает карточку в сессию", async (t) => {

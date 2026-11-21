@@ -53,8 +53,11 @@ interface PlannedRow extends PreviewRow { text: string; excluded: boolean }
 export type Confirmation = { confirmed: true } | { confirmed: false; paths: readonly string[] };
 
 const hasPath = (path: string, parent: string) => parent === "" || path === parent || path.startsWith(parent + "/");
-export const remapPath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
-  ? newPath + path.slice(oldPath.length) : path;
+export function remapPath(path: string, oldPath: string, newPath: string) {
+  if (!hasPath(path, oldPath)) return path;
+  const relative = oldPath ? path.slice(oldPath.length + 1) : path;
+  return newPath && relative ? newPath + "/" + relative : newPath || relative;
+}
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 
 function includesPath(source: SourceRequest, path: string) {
