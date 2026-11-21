@@ -1,0 +1,218 @@
+import { Component, ItemView, MarkdownRenderer, Modal, Notice, type App, type WorkspaceLeaf } from "obsidian";
+import { statuses, type Status } from "./markdown";
+import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
+import type { Card, StudyCards } from "./study-cards";
+
+export const viewType = "study-cards";
+
+export class StudyView extends ItemView {
+  private unsubscribe?: () => void;
+  private answers = new Component();
+
+  constructor(leaf: WorkspaceLeaf, private readonly study: StudyCards, private readonly watch: WatchVault,
+    private readonly openNote: (path: string) => Promise<void>) {
+    super(leaf);
+  }
+
+  getViewType() { return viewType; }
+  getDisplayText() { return "Study Cards"; }
+  getIcon() { return "book-open"; }
+
+  async onOpen() {
+    this.unsubscribe = this.study.subscribe(() => this.render());
+    this.render();
+  }
+
+  async onClose() {
+    this.unsubscribe?.();
+    this.removeChild(this.answers);
+  }
+
+  private render() {
+    const root = this.contentEl;
+    const opened = new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card")));
+    this.removeChild(this.answers);
+    this.answers = this.addChild(new Component());
+    root.empty();
+    root.addClass("study-cards-view");
+
+    const toolbar = root.createDiv({ cls: "study-cards-controls" });
+    const sectionId = this.study.activeSection;
+    const section = this.study.sections.find(({ id }) => id === sectionId);
+    if (this.study.sections.length) {
+      const select = toolbar.createEl("label", { text: "Учебный раздел " }).createEl("select");
+      for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
+      select.value = section?.id ?? "";
+      select.onchange = () => this.perform(this.study.openSection(select.value));
+    }
+    toolbar.createEl("button", { text: "Новый раздел" }).onclick = () => new SectionModal(this.app, this.study).open();
+    if (!section) {
+      root.createEl("p", { text: "Создайте учебный раздел, чтобы добавить заметки или папки." });
+      return;
+    }
+    toolbar.createEl("button", { text: "Добавить источники" }).onclick =
+      () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open();
+    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta" }).onclick =
+      () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open();
+
+    const sources = root.createEl("details", { attr: { "data-card": "sources" } });
+    sources.open = opened.has("sources");
+    sources.createEl("summary", { text: "Источники · " + section.sources.length });
+    for (const source of section.sources) {
+      const row = sources.createDiv({ cls: "study-cards-controls study-cards-item" });
+      row.createSpan({ text: (source.path || "Корень хранилища") + (source.recursive ? " · с подпапками" : "") });
+      if (source.kind === "folder") {
+        row.createEl("button", { text: "Настроить" }).onclick = () =>
+          new SelectSourcesModal(this.app, this.study, this.watch, section.id, [source], true).open();
+      }
+      row.createEl("button", { text: "Отключить" }).onclick = () => this.perform(this.study.removeSource(section.id, source.id));
+    }
+    const cards = this.study.cards(section.id);
+    root.createEl("h3", { text: "Карточки · " + cards.length });
+    for (const { path, message } of this.study.errors(section.id)) {
+      const error = root.createDiv({ cls: "study-cards-item" });
+      error.createEl("p", { text: path + " · " + message });
+      error.createEl("button", { text: "Открыть заметку" }).onclick = () => this.perform(this.openNote(path));
+      error.createEl("button", { text: "Предпросмотр подключения" }).onclick = () =>
+        new SelectSourcesModal(this.app, this.study, this.watch, section.id, [{ kind: "file", path }]).open();
+    }
+    for (const card of cards) {
+      const key = card.path + ":" + (card.id ?? "") + ":" + card.index;
+      this.renderCard(root, card, key, opened.has(key));
+    }
+  }
+
+  private renderCard(root: HTMLElement, card: Card, key: string, open: boolean) {
+    const details = root.createEl("details", { cls: "study-cards-item", attr: { "data-card": key } });
+    details.open = open;
+    details.createEl("summary", { text: card.question });
+    const actions = details.createDiv({ cls: "study-cards-controls" });
+    actions.createEl("button", { text: card.path, attr: { "aria-label": "Открыть заметку " + card.path } }).onclick =
+      () => this.perform(this.openNote(card.path));
+    const select = actions.createEl("label", { text: "Статус освоения " }).createEl("select");
+    if (card.status === "invalid") {
+      select.createEl("option", { value: "invalid", text: "Некорректный статус" }).disabled = true;
+    }
+    for (const [value, text] of Object.entries(statuses)) select.createEl("option", { value, text });
+    select.value = card.status;
+    select.onchange = () => {
+      const status = select.value as Status;
+      select.value = card.status;
+      this.perform(this.study.setStatus(card, status));
+    };
+
+    if (card.identity === "duplicate" && card.id) {
+      actions.createEl("button", { text: "Разрешить конфликт UUID" }).onclick =
+        () => new DuplicateModal(this.app, this.study, card.id!).open();
+    } else if (card.identity === "missing" || card.identity === "invalid") {
+      actions.createSpan({ text: card.identity === "missing" ? "UUID отсутствует" : "Некорректный UUID" });
+      actions.createEl("button", { text: "Создать новый ID" }).onclick = () => this.perform(this.study.repairId(card));
+    }
+
+    const answer = details.createDiv();
+    let rendered = false;
+    const renderAnswer = () => {
+      if (rendered || !details.open) return;
+      rendered = true;
+      this.perform(MarkdownRenderer.render(this.app, card.answer, answer, card.path, this.answers));
+    };
+    details.ontoggle = renderAnswer;
+    renderAnswer();
+    if (card.progress) {
+      const results = details.createEl("details");
+      results.createEl("summary", { text: "Результаты и расписание" });
+      if (card.progress.history !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.history, null, 2) });
+      if (card.progress.schedule !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.schedule, null, 2) });
+    }
+  }
+
+  private perform(promise: Promise<unknown>) {
+    void promise.catch((error) => new Notice(message(error)));
+  }
+}
+
+class SectionModal extends Modal {
+  constructor(app: App, private readonly study: StudyCards) { super(app); }
+
+  onOpen() {
+    this.setTitle("Новый учебный раздел");
+    const form = this.contentEl.createEl("form", { cls: "study-cards-form" });
+    const name = form.createEl("label", { text: "Название " }).createEl("input", { type: "text" });
+    name.required = true;
+    name.focus();
+    const error = form.createEl("p", { attr: { role: "status" } });
+    const submit = form.createEl("button", { type: "submit", text: "Создать раздел", cls: "mod-cta" });
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      void this.study.addSection(name.value).then(() => this.close()).catch((reason) => {
+        error.textContent = message(reason);
+        submit.disabled = false;
+      });
+    };
+  }
+}
+
+class DuplicateModal extends Modal {
+  constructor(app: App, private readonly study: StudyCards, private readonly id: string) { super(app); }
+
+  onOpen() {
+    this.setTitle("Конфликт UUID");
+    const cards = this.study.duplicates(this.id);
+    if (cards.length < 2) {
+      this.contentEl.createEl("p", { text: "Конфликт уже решён." });
+      return;
+    }
+    const selectCard = (label: string) => {
+      const select = this.contentEl.createEl("label", { cls: "study-cards-form", text: label }).createEl("select");
+      select.createEl("option", { value: "", text: "Выберите карточку" }).disabled = true;
+      cards.forEach((card, index) => select.createEl("option", {
+        text: card.path + " · " + card.question + " · строка " + card.line,
+        value: String(index),
+      }));
+      select.value = "";
+      return select;
+    };
+    const keep = selectCard("Сохранить историю у");
+    const change = selectCard("Изменить карточку");
+    const actions = this.contentEl.createDiv({ cls: "study-cards-controls" });
+    const renew = actions.createEl("button", { text: "Выдать новый UUID", cls: "mod-cta" });
+    const trash = actions.createEl("button", { text: "Переместить заметку в корзину", cls: "mod-warning" });
+    const update = () => {
+      renew.disabled = keep.value === "" || change.value === "" || keep.value === change.value;
+      const card = cards[Number(change.value)];
+      trash.disabled = renew.disabled || !card || !this.study.canTrash(card);
+    };
+    const resolve = (action: "new-id" | "trash") => {
+      const winner = cards[Number(keep.value)];
+      const other = cards[Number(change.value)];
+      if (!winner || !other) return;
+      const apply = () => {
+        renew.disabled = trash.disabled = true;
+        void this.study.resolveDuplicate(winner, other, action).then(() => this.close()).catch((error) => {
+          new Notice(message(error));
+          update();
+        });
+      };
+      if (action === "new-id") apply();
+      else new TrashModal(this.app, other.path, apply).open();
+    };
+    keep.onchange = change.onchange = update;
+    renew.onclick = () => resolve("new-id");
+    trash.onclick = () => resolve("trash");
+    update();
+  }
+}
+
+class TrashModal extends Modal {
+  constructor(app: App, private readonly path: string, private readonly confirm: () => void) { super(app); }
+
+  onOpen() {
+    this.setTitle("Переместить заметку в корзину?");
+    this.contentEl.createEl("p", { text: this.path });
+    this.contentEl.createEl("button", { text: "Переместить в корзину хранилища", cls: "mod-warning" }).onclick = () => {
+      this.close();
+      this.confirm();
+    };
+  }
+}
