@@ -126,7 +126,7 @@ export class StudyCards {
   private catalog: { data: StudyData; index: Map<string, IndexedNote>; revision: string | null };
   private readonly listeners = new Set<() => void>();
   private queue = Promise.resolve<unknown>(undefined);
-  private revision = 0;
+  private catalogChangeCount = 0;
   private saving = false;
 
   constructor(
@@ -215,7 +215,7 @@ export class StudyCards {
     const mutation = options.mutation;
     return this.enqueue(async () => {
       const token = this.storage.token;
-      const revision = this.revision;
+      const changes = this.catalogChangeCount;
       let published = false;
       try {
         await this.storage.refresh();
@@ -244,7 +244,7 @@ export class StudyCards {
         await this.adoptStorage();
         this.data = this.catalog.data;
         this.index = this.catalog.index;
-        if (wasSaving || published || revision !== this.revision || token !== this.storage.token) this.notify();
+        if (wasSaving || published || changes !== this.catalogChangeCount || token !== this.storage.token) this.notify();
       }
     });
   }
@@ -357,11 +357,11 @@ export class StudyCards {
         identity: card.id ? "valid" : card.invalidId ? "invalid" : "missing",
       })),
     });
-    this.revision++;
+    this.catalogChangeCount++;
   }
 
   private removeFromIndex(path: string) {
-    if (this.index.delete(path)) this.revision++;
+    if (this.index.delete(path)) this.catalogChangeCount++;
   }
 
   private async reconcile(path: string, autoAssign = true, saved?: MarkdownNote, updateKnown = true) {
@@ -421,14 +421,14 @@ export class StudyCards {
   delete(path: string) {
     return this.run("Удаление заметки", async () => {
       for (const key of this.index.keys()) if (hasPath(key, path)) this.removeFromIndex(key);
-      if (this.data.sections.some(({ sources }) => sources.some((source) => hasPath(source.path, path)))) this.revision++;
+      if (this.data.sections.some(({ sources }) => sources.some((source) => hasPath(source.path, path)))) this.catalogChangeCount++;
     }, { background: true });
   }
 
   rename(oldPath: string, newPath: string) {
     return this.run("Перемещение источника", async () => {
       if (this.storage.problem) {
-        this.revision++;
+        this.catalogChangeCount++;
         await this.scanIndex(false);
         return;
       }
@@ -598,7 +598,7 @@ export class StudyCards {
         if (!card) throw new Error("Вопрос пока недоступен.");
         await this.verifyCard(card);
       }
-      this.data.freeSession = structuredClone(session);
+      this.data.freeSession = structuredClone({ ...session, grades: { ...previous?.grades, ...session.grades } });
     }, { mutation });
   }
 

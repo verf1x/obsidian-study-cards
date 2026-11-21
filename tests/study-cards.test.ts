@@ -569,6 +569,8 @@ test("свободная проверка сохраняет исправлен�
   assert.deepEqual(study.freeCheckQuestions().map(({ id, card, grade }) => [id, card?.path ?? null, grade]),
     [[first, null, "incorrect"], [second, "Второй.md", null]]);
   assert.deepEqual(study.missingSources(sectionId).map(({ id }) => id), [source.id]);
+  await study.saveFreeCheck(mutation(), { ...session, position: 0, grades: {} });
+  assert.equal(study.freeCheckQuestions()[0]?.grade, "incorrect");
 
   const newPath = "Перенос/Первый.md";
   await vault.files.create(newPath, saved);
@@ -596,7 +598,22 @@ test("свободная проверка сохраняет исправлен�
 
   vault.beforePersist();
   const retry = { id: randomUUID(), sectionId, startedAt: finishedAt, retryOf: session.id, cardIds: [first], position: 0, grades: {} };
+  const retryCard = study.cards(sectionId).find(({ id }) => id === first)!;
+  await study.recordReview(mutation(), retryCard,
+    { sectionId, sessionId: randomUUID(), at: finishedAt, grade: "hard" }, { dueAt: "2026-11-24T11:00:00Z" });
+  await study.setSuspended(mutation(), retryCard, true);
   await study.saveFreeCheck(mutation(), retry);
+  const beforeExport = study.progress;
+  const exported = await study.exportStudyData();
+  await study.addSection("Новые данные");
+  const preview = await study.previewImport(exported);
+  assert.equal(preview.incoming.intervalReviews, 1);
+  assert.equal(preview.incoming.freeResults, 1);
+  assert.equal(preview.incoming.pendingCheck?.retry, true);
+  await study.importStudyData(preview);
+  assert.deepEqual(study.progress.progress, beforeExport.progress);
+  assert.deepEqual(study.progress.freeResults, beforeExport.freeResults);
+  assert.deepEqual(study.progress.freeSession, beforeExport.freeSession);
   study = await vault.open();
   await study.scan();
   assert.equal(study.progress.freeSession?.retryOf, session.id);

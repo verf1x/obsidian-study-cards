@@ -11,6 +11,7 @@ function summary(root: HTMLElement, version: SnapshotSummary | null) {
     return;
   }
   root.createEl("p", { text: date(version.savedAt) + " · " + version.action });
+  if (version.unconfirmed) root.createEl("p", { text: "Не удалось подтвердить запись этой версии в общий файл." });
   root.createEl("p", { text: version.sections.length ? version.sections.join(", ") : "Нет учебных разделов" });
   root.createEl("p", { text: `Интервальных оценок · ${version.intervalReviews}. Результатов свободной проверки · ${version.freeResults}.` });
   const check = version.pendingCheck;
@@ -46,6 +47,11 @@ export function renderStudyStorage(app: App, root: HTMLElement, study: StudyCard
         const select = item.createEl("button", { text: "Использовать эту версию" });
         select.disabled = saving;
         select.onclick = () => report(study.chooseStudyVersion(token, version.id));
+      }
+      if (problem.canStartEmpty) {
+        const start = panel.createEl("button", { text: "Создать пустое состояние" });
+        start.disabled = saving;
+        start.onclick = () => new RestoreModal(app, false, () => study.restoreStudyData(token, false)).open();
       }
     } else {
       const reason = {

@@ -15,12 +15,20 @@ interface Revision {
 
 interface Snapshot extends Revision { checksum: string }
 
+interface PendingWrite {
+  snapshot: Snapshot;
+  base: string | null;
+  retryable: boolean;
+  beforeImport: Snapshot | null;
+}
+
 interface DeviceState {
   known: boolean;
   activeSection: string | null;
   head: Snapshot | null;
   branches: Snapshot[];
-  pending: Snapshot | null;
+  pending: PendingWrite | null;
+  uncertain: PendingWrite | null;
   migration: Snapshot | null;
   legacy: unknown;
   damaged: string | null;
@@ -42,10 +50,11 @@ export interface SnapshotSummary {
   intervalReviews: number;
   freeResults: number;
   pendingCheck: { answered: number; total: number; retry: boolean } | null;
+  unconfirmed?: boolean;
 }
 
 export type StorageProblem =
-  | { kind: "conflict"; versions: SnapshotSummary[] }
+  | { kind: "conflict"; versions: SnapshotSummary[]; canStartEmpty: boolean }
   | { kind: "recovery"; reason: "missing" | "damaged" | "migration"; backup: SnapshotSummary | null }
   | { kind: "unsupported"; version: number };
 
@@ -79,11 +88,14 @@ function canonical(value: unknown): unknown {
     : value;
 }
 
-async function checksum(revision: Revision): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(canonical(revision)));
+async function hash(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+const checksum = (revision: Revision) => hash(JSON.stringify(canonical(revision)));
+const fingerprint = (raw: string | null) => raw === null ? null : hash(raw);
 
 async function validateSnapshot(value: unknown): Promise<Snapshot> {
   if (record(value) && typeof value.version === "number" && value.version > version) {
@@ -105,6 +117,12 @@ async function validateSnapshot(value: unknown): Promise<Snapshot> {
 
 async function backup(value: unknown) {
   return validateSnapshot(value).catch(() => null);
+}
+
+async function pendingWrite(value: unknown): Promise<PendingWrite | null> {
+  if (!record(value) || (value.base !== null && typeof value.base !== "string")) return null;
+  const [snapshot, beforeImport] = await Promise.all([backup(value.snapshot), backup(value.beforeImport)]);
+  return snapshot && { snapshot, base: value.base, retryable: value.retryable === true, beforeImport };
 }
 
 const serialize = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
@@ -144,21 +162,21 @@ export class StudyStorage {
   private queue = Promise.resolve<unknown>(undefined);
   private raw: string | null | undefined;
   private current: StorageState = { revision: null, token: 0, data: emptyStudyData(), problem: null };
-  private readonly imports = new WeakMap<ImportPreview, Snapshot>();
+  private readonly imports = new WeakMap<ImportPreview, { snapshot: Snapshot; id: string }>();
 
   private constructor(private readonly io: StudyStorageIO, private device: DeviceState, private readonly newId: () => string) {}
 
   static async open(io: StudyStorageIO, legacy: unknown, newId: () => string) {
     const local = await io.readDevice();
     const saved = record(local) ? local : {};
-    const [head, pending, migration, beforeImport, branches] = await Promise.all([
-      backup(saved.head), backup(saved.pending), backup(saved.migration), backup(saved.beforeImport),
+    const [head, pending, uncertain, migration, beforeImport, branches] = await Promise.all([
+      backup(saved.head), pendingWrite(saved.pending), pendingWrite(saved.uncertain), backup(saved.migration), backup(saved.beforeImport),
       Promise.all((Array.isArray(saved.branches) ? saved.branches : []).map(backup)),
     ]);
     const device: DeviceState = {
       known: saved.known === true || saved.head != null,
       activeSection: typeof saved.activeSection === "string" ? saved.activeSection : null,
-      head, pending, migration, beforeImport,
+      head, pending, uncertain, migration, beforeImport,
       legacy: saved.legacy ?? null,
       damaged: typeof saved.damaged === "string" ? saved.damaged : null,
       branches: branches.filter((branch) => branch !== null),
@@ -172,7 +190,7 @@ export class StudyStorage {
         activeSection: device.activeSection ?? old?.activeSection ?? null,
       });
     }
-    await store.readLatest();
+    await store.readLatest(true);
     if (store.raw === null && !store.device.known && store.device.migration) {
       try {
         await store.publish(store.device.migration);
@@ -209,7 +227,7 @@ export class StudyStorage {
       this.ensureWritable();
       const draft = structuredClone(this.current.data);
       const data = update(draft) ?? draft;
-      const pending = this.device.pending;
+      const pending = this.device.pending?.snapshot;
       const candidate = pending?.id === mutation.id && (pending.ancestors[pending.ancestors.length - 1] ?? null) === mutation.revision
         ? pending
         : await this.makeRevision(mutation.id, mutation.action, data, head);
@@ -247,7 +265,7 @@ export class StudyStorage {
         incoming: summarize(snapshot),
         current: current && summarize(current),
       };
-      this.imports.set(preview, snapshot);
+      this.imports.set(preview, { snapshot, id: this.newId() });
       return preview;
     }).catch((error: unknown) => {
       if (error instanceof SyntaxError) throw new Error("Файл импорта Study Cards повреждён.");
@@ -257,38 +275,46 @@ export class StudyStorage {
 
   import(preview: ImportPreview) {
     return this.run(async () => {
-      const snapshot = this.imports.get(preview);
-      if (!snapshot) throw new Error("Откройте предпросмотр импорта.");
-      await this.checkToken(preview.token);
+      const entry = this.imports.get(preview);
+      if (!entry) throw new Error("Откройте предпросмотр импорта.");
+      await this.readLatest();
+      if (this.wasCommitted(entry.id)) return;
+      this.checkToken(preview.token);
       if (this.current.problem?.kind === "conflict") this.ensureWritable();
       const head = this.device.head ?? this.device.migration;
-      if (head) await this.saveDevice({ ...this.device, beforeImport: head });
-      const candidate = await this.makeRevision(this.newId(), "Импорт снимка", snapshot.data, head, [
-        ...this.device.branches, snapshot,
-      ]);
-      await this.publish(candidate);
+      const pending = this.device.pending;
+      const candidate = pending?.snapshot.id === entry.id ? pending.snapshot
+        : await this.makeRevision(entry.id, "Импорт снимка", entry.snapshot.data, head, [entry.snapshot]);
+      await this.publish(candidate, head);
     });
   }
 
   choose(token: number, id: string) {
     return this.run(async () => {
-      await this.checkToken(token);
-      const selected = this.device.branches.find((item) => item.id === id);
+      await this.readLatest();
+      this.checkToken(token);
+      const versions = this.availableVersions(this.device);
+      const selected = versions.find((item) => item.id === id);
       if (this.current.problem?.kind !== "conflict" || !selected) throw new StaleStudyState();
-      const candidate = await this.makeRevision(this.newId(), "Выбор версии", selected.data, selected, this.device.branches);
-      await this.publish(candidate);
+      const candidate = await this.makeRevision(this.newId(), "Выбор версии", selected.data, selected, versions);
+      const uncertain = this.device.uncertain;
+      await this.publish(candidate, uncertain?.snapshot.id === selected.id ? uncertain.beforeImport : null);
     });
   }
 
   restore(token: number, useBackup: boolean) {
     return this.run(async () => {
-      await this.checkToken(token);
-      if (this.current.problem?.kind !== "recovery") throw new StaleStudyState();
+      await this.readLatest();
+      this.checkToken(token);
+      const problem = this.current.problem;
+      if (problem?.kind !== "recovery" && !(problem?.kind === "conflict" && problem.canStartEmpty && !useBackup)) {
+        throw new StaleStudyState();
+      }
       const head = this.device.head ?? this.device.migration;
       if (useBackup !== Boolean(head)) throw new StaleStudyState();
       const data = head?.data ?? emptyStudyData();
       const candidate = await this.makeRevision(this.newId(), head ? "Восстановление копии" : "Создание состояния",
-        data, head, this.device.branches);
+        data, head, this.availableVersions(this.device));
       await this.publish(candidate);
     });
   }
@@ -311,8 +337,7 @@ export class StudyStorage {
     if (problem?.kind === "recovery") throw new Error("Восстановите данные Study Cards перед сохранением.");
   }
 
-  private async checkToken(token: number) {
-    await this.readLatest();
+  private checkToken(token: number) {
     if (token !== this.current.token) throw new StaleStudyState();
     const problem = this.current.problem;
     if (problem?.kind === "unsupported") throw new UnsupportedVersion(problem.version);
@@ -339,13 +364,45 @@ export class StudyStorage {
     return { ...revision, checksum: await checksum(revision) };
   }
 
-  private async readLatest() {
-    await this.observe(await this.io.readShared());
+  private async readLatest(startup = false) {
+    await this.observe(await this.io.readShared(), startup);
   }
 
-  private async observe(raw: string | null) {
+  private availableVersions(device: DeviceState) {
+    const { head, branches, migration, uncertain } = device;
+    return [...new Map([head, ...branches, migration, uncertain?.snapshot ?? null]
+      .filter((item) => item !== null).map((item) => [item.id, item])).values()];
+  }
+
+  private async settlePending(device: DeviceState, incoming: Snapshot | null, raw: string | null, startup: boolean) {
+    let next = device;
+    const { pending, uncertain, migration } = next;
+    if (incoming && uncertain) {
+      const id = uncertain.snapshot.id;
+      if (includesRevision(incoming, id) || incoming.superseded.includes(id)) {
+        next = { ...next, uncertain: null,
+          beforeImport: includesRevision(incoming, id) ? uncertain.beforeImport ?? next.beforeImport : next.beforeImport };
+      }
+    }
+    if (!pending) return next;
+    const id = pending.snapshot.id;
+    if (incoming && (includesRevision(incoming, id) || incoming.superseded.includes(id))) {
+      return { ...next, pending: null,
+        beforeImport: includesRevision(incoming, id) ? pending.beforeImport ?? next.beforeImport : next.beforeImport };
+    }
+    // Only a matching shared version can confirm a write that was interrupted at the device checkpoint.
+    // If sync changed the file before we could check, keep the tentative copy for an explicit choice.
+    if (!pending.retryable && migration?.id !== id
+      && (await fingerprint(raw) !== pending.base || (startup && raw === null))) {
+      return { ...next, pending: null, uncertain: pending };
+    }
+    return next;
+  }
+
+  private async observe(raw: string | null, startup = false) {
     if (raw === this.raw) return;
     let next = this.device;
+    let incoming: Snapshot | null = null;
     let problem: StorageProblem | null = null;
 
     if (raw === null) {
@@ -354,11 +411,9 @@ export class StudyStorage {
         problem = { kind: "recovery", reason: next.migration ? "migration" : "missing", backup: copy && summarize(copy) };
       }
     } else {
-      let incoming: Snapshot | null = null;
       try {
         incoming = await validateSnapshot(JSON.parse(raw));
-        const known = [next.head, ...next.branches, next.pending, next.migration]
-          .find((snapshot) => snapshot?.id === incoming?.id);
+        const known = [...this.availableVersions(next), next.pending?.snapshot].find((item) => item?.id === incoming?.id);
         if (known && known.checksum !== incoming.checksum) throw new Error("Данные версии изменены.");
       } catch (error) {
         incoming = null;
@@ -367,49 +422,61 @@ export class StudyStorage {
         problem = error instanceof UnsupportedVersion ? { kind: "unsupported", version: error.version }
           : { kind: "recovery", reason: "damaged", backup: copy && summarize(copy) };
       }
-
-      if (incoming) {
-        let migration = next.migration;
-        if (migration && JSON.stringify(canonical(migration.data)) === JSON.stringify(canonical(incoming.data))) migration = null;
-        const available = latestVersions([next.head, ...next.branches, migration, incoming].filter((item) => item !== null));
-        const [latest] = available;
-        if (available.length > 1) problem = { kind: "conflict", versions: available.map(summarize) };
-        next = {
-          ...next,
-          known: true,
-          head: available.find(({ id }) => id === next.head?.id) ?? latest ?? incoming,
-          branches: available.length > 1 ? available : [],
-          migration: null,
-          pending: next.pending && !includesRevision(incoming, next.pending.id) && !incoming.superseded.includes(next.pending.id)
-            ? next.pending : null,
-        };
-      }
     }
 
-    if (JSON.stringify(next) !== JSON.stringify(this.device)) await this.saveDevice(next);
+    next = await this.settlePending(next, incoming, raw, startup);
+    if (incoming) {
+      let migration = next.migration;
+      if (migration && JSON.stringify(canonical(migration.data)) === JSON.stringify(canonical(incoming.data))) migration = null;
+      const available = latestVersions([next.head, ...next.branches, migration, incoming].filter((item) => item !== null));
+      next = {
+        ...next,
+        known: true,
+        head: available.find(({ id }) => id === next.head?.id) ?? available[0] ?? incoming,
+        branches: available.length > 1 ? available : [],
+        migration: null,
+      };
+    }
+    if (problem?.kind !== "unsupported" && (next.branches.length > 1 || next.uncertain)) {
+      problem = {
+        kind: "conflict",
+        versions: this.availableVersions(next).map((item) => ({
+          ...summarize(item), unconfirmed: item.id === next.uncertain?.snapshot.id,
+        })),
+        canStartEmpty: !next.head && !next.migration,
+      };
+    }
+
+    if (next !== this.device) await this.saveDevice(next);
     this.raw = raw;
     const head = next.head ?? next.migration;
     this.current = { revision: head?.id ?? null, token: this.current.token + 1, data: head?.data ?? emptyStudyData(), problem };
   }
 
-  private async publish(candidate: Snapshot) {
+  private async publish(snapshot: Snapshot, beforeImport: Snapshot | null = null) {
     const expected = this.raw ?? null;
-    const encoded = serialize(candidate);
+    const pending = { snapshot, base: await fingerprint(expected), retryable: false, beforeImport };
     try {
-      await this.saveDevice({ ...this.device, pending: candidate });
-      await this.io.writeShared(expected, encoded);
+      await this.saveDevice({ ...this.device, pending });
+      await this.io.writeShared(expected, serialize(snapshot));
     } catch (error) {
       try {
         await this.readLatest();
+        if (this.wasCommitted(snapshot.id)) return;
+        if (this.raw === expected && this.device.pending === pending) {
+          await this.saveDevice({ ...this.device, pending: { ...pending, retryable: true } });
+        }
       } catch {
         throw operationFailed(error);
       }
-      const head = this.device.head;
-      if (head && includesRevision(head, candidate.id)) return;
       if (this.raw !== expected && this.current.problem?.kind !== "recovery") throw new StaleStudyState();
       throw operationFailed(error);
     }
-    await this.observe(encoded);
+    try {
+      await this.observe(serialize(snapshot));
+    } catch (error) {
+      throw operationFailed(error);
+    }
   }
 }
 

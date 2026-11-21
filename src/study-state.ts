@@ -1,3 +1,4 @@
+import { isCardId } from "./card-id";
 import type { Format } from "./markdown";
 
 export type SourceRequest =
@@ -72,7 +73,6 @@ export const record = (value: unknown): value is Record<string, unknown> =>
 const text = (value: unknown): value is string => typeof value === "string";
 const id = (value: unknown): value is string => text(value) && value.length > 0;
 export const isDate = (value: unknown): value is string => text(value) && Number.isFinite(Date.parse(value));
-const uuid = (value: unknown) => text(value) && /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value);
 const distinct = (values: string[]) => new Set(values).size === values.length;
 export const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(id) && distinct(value);
 
@@ -91,7 +91,7 @@ function sections(value: unknown): value is Section[] {
 
 function knownNotes(value: unknown): value is StudyData["knownNotes"] {
   return record(value) && Object.values(value).every((note) => record(note) && format(note.format)
-    && Array.isArray(note.cards) && note.cards.every((card) => record(card) && uuid(card.id)
+    && Array.isArray(note.cards) && note.cards.every((card) => record(card) && isCardId(card.id)
       && text(card.question) && Number.isSafeInteger(card.answerHash)));
 }
 
@@ -102,7 +102,7 @@ function review(value: unknown): value is IntervalReview {
 }
 
 function progress(value: unknown): value is StudyData["progress"] {
-  return record(value) && Object.entries(value).every(([key, card]) => uuid(key) && record(card)
+  return record(value) && Object.entries(value).every(([key, card]) => isCardId(key) && record(card)
     && (card.suspended === undefined || typeof card.suspended === "boolean")
     && (card.reviews === undefined || (Array.isArray(card.reviews) && card.reviews.every(review)
       && distinct(card.reviews.map(({ id }) => id))
@@ -112,7 +112,7 @@ function progress(value: unknown): value is StudyData["progress"] {
 function freeCheck(value: unknown): value is FreeCheck {
   return record(value) && id(value.id) && id(value.sectionId) && isDate(value.startedAt)
     && (value.retryOf === null || id(value.retryOf)) && stringList(value.cardIds)
-    && value.cardIds.length > 0 && value.cardIds.every(uuid) && record(value.grades)
+    && value.cardIds.length > 0 && value.cardIds.every(isCardId) && record(value.grades)
     && Object.entries(value.grades).every(([key, grade]) => (value.cardIds as string[]).includes(key)
       && (grade === "correct" || grade === "incorrect"));
 }

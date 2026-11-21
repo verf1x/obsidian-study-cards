@@ -5,6 +5,7 @@ import { StudyStorage, type StudyStorageIO } from "../src/study-storage";
 
 function device(file: { raw: string | null }) {
   let local: unknown;
+  let failCheckpoint = false;
   let write: ((apply: () => void) => void | Promise<void>) | undefined;
   const io: StudyStorageIO = {
     async readShared() { return file.raw; },
@@ -17,15 +18,22 @@ function device(file: { raw: string | null }) {
       else apply();
     },
     async readDevice() { return structuredClone(local); },
-    async writeDevice(next) { local = structuredClone(next); },
+    async writeDevice(next) {
+      if (failCheckpoint) {
+        failCheckpoint = false;
+        throw new Error("local checkpoint interrupted");
+      }
+      local = structuredClone(next);
+    },
   };
   return {
     open: (legacy?: unknown) => StudyStorage.open(io, legacy, randomUUID),
     beforeWrite(hook?: typeof write) { write = hook; },
+    failNextDeviceWrite() { failCheckpoint = true; },
   };
 }
 
-test("повторяет прерванную миграцию и сохраняет UUID, расписание и локальный раздел", async () => {
+test("повторяет прерванную миграцию и сохраняет UUID, расписание и последний открытый раздел", async () => {
   const file = { raw: null as string | null };
   const desktop = device(file);
   const section = randomUUID();
@@ -78,6 +86,11 @@ test("блокирует запись при расхождении и пере�
   assert.equal(problem?.kind, "conflict");
   assert.deepEqual(problem?.versions.map(({ action }) => action).sort(), ["Компьютер", "Телефон"]);
   await assert.rejects(save(desktop, "Новая запись"), /Выберите рабочую версию/);
+  left.raw = null;
+  await desktop.refresh();
+  assert.equal(desktop.problem?.kind, "conflict");
+  await assert.rejects(desktop.restore(desktop.state.token, true), /изменились/);
+  assert.equal(left.raw, null);
   const selected = problem?.versions.find(({ action }) => action === "Компьютер");
   await desktop.choose(desktop.state.token, selected!.id);
   right.raw = left.raw;
@@ -192,4 +205,82 @@ test("локальная навигация независима, действи
   await assert.rejects(desktop.commit(stale, (draft) => { draft.sections[0]!.name = "С компьютера"; }), /изменились/);
   assert.equal(desktop.state.data.sections[0]?.name, "С телефона");
   assert.equal(desktop.activeSection, a.id);
+});
+
+test("предлагает запись без подтверждения после подмены общего файла перед запуском", async () => {
+  const firstFile = { raw: null as string | null };
+  const desktop = device(firstFile);
+  const original = await desktop.open();
+  const section = { id: randomUUID(), name: "Курс", sources: [] };
+  const setName = (store: StudyStorage, name: string) => store.commit({
+    id: randomUUID(), revision: store.state.revision, action: name,
+  }, (draft) => { draft.sections = [{ ...section, name }]; });
+  await setName(original, "Курс");
+  const mobileFile = { raw: firstFile.raw };
+  const mobile = await device(mobileFile).open();
+  await setName(mobile, "Телефон");
+
+  desktop.beforeWrite((apply) => {
+    apply();
+    desktop.failNextDeviceWrite();
+  });
+  await assert.rejects(setName(original, "Компьютер"), /Повторите действие/);
+  firstFile.raw = mobileFile.raw;
+  desktop.beforeWrite();
+  const reopened = await desktop.open();
+  const problem = reopened.problem;
+  assert.equal(problem?.kind, "conflict");
+  assert.equal(reopened.state.data.sections[0]?.name, "Телефон");
+  const draft = problem?.versions.find(({ action }) => action === "Компьютер");
+  assert.equal(draft?.unconfirmed, true);
+  await reopened.choose(reopened.state.token, draft!.id);
+  assert.equal(reopened.state.data.sections[0]?.name, "Компьютер");
+  assert.equal(reopened.problem, null);
+});
+
+test("повтор уже опубликованного импорта сохраняет исходную копию после сбоя локальной записи", async () => {
+  const file = { raw: null as string | null };
+  const deviceStorage = device(file);
+  const store = await deviceStorage.open();
+  const save = (name: string) => store.commit({
+    id: randomUUID(), revision: store.state.revision, action: name,
+  }, (draft) => { draft.sections = [{ id: randomUUID(), name, sources: [] }]; });
+  await save("Из экспорта");
+  const exported = await store.export();
+  await save("Перед импортом");
+  const preview = await store.previewImport(exported);
+  deviceStorage.beforeWrite((apply) => { apply(); deviceStorage.failNextDeviceWrite(); });
+  await assert.rejects(store.import(preview), /Повторите действие/);
+  const applied = file.raw;
+  deviceStorage.beforeWrite();
+  await store.import(preview);
+  assert.equal(file.raw, applied);
+  assert.deepEqual(store.state.data.sections.map(({ name }) => name), ["Из экспорта"]);
+  const backup = await store.previewImport(store.exportBeforeImport());
+  assert.deepEqual(backup.incoming.sections, ["Перед импортом"]);
+});
+
+test("прежние локальные данные рядом с общим файлом требуют выбора версии", async () => {
+  const file = { raw: null as string | null };
+  const first = await device(file).open();
+  await first.commit({ id: randomUUID(), revision: first.state.revision, action: "Общий файл" },
+    (draft) => { draft.sections = [{ id: randomUUID(), name: "Общий раздел", sources: [] }]; });
+  const shared = file.raw;
+  const section = { id: randomUUID(), name: "Прежний раздел", sources: [] };
+  const local = { sections: [section], activeSection: section.id, knownNotes: {}, progress: {} };
+  const secondDevice = device(file);
+  let store = await secondDevice.open(local);
+  assert.equal(store.problem?.kind, "conflict");
+  assert.equal(file.raw, shared);
+  store = await secondDevice.open(local);
+  const conflict = store.problem;
+  assert.equal(conflict?.kind, "conflict");
+  assert.equal(conflict?.versions.length, 2);
+  const previous = conflict?.versions.find(({ sections }) => sections.includes(section.name));
+  await store.choose(store.state.token, previous!.id);
+  assert.deepEqual(store.legacyBackup, local);
+  assert.deepEqual(store.state.data.sections, [section]);
+  await first.refresh();
+  assert.equal(first.problem, null);
+  assert.deepEqual(first.state.data.sections, [section]);
 });
