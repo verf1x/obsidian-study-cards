@@ -71,7 +71,6 @@ export class PrototypeView extends StudyView {
     const cards = this.study.cards(sectionId);
     const available = cards.filter(isCheckCard).length;
     const header = root.createDiv({ cls: "study-cards-section-header" });
-    root.prepend(header);
     const title = header.createDiv();
     title.createEl("h1", { text: "Карточки", attr: { tabindex: "-1", "data-focus": "catalog" } });
     const count = cards.length;
@@ -104,7 +103,7 @@ export class PrototypeView extends StudyView {
     }
   }
 
-  protected renderCatalogActions(toolbar: HTMLElement, sourceRow: HTMLElement, actions: CatalogActions) {
+  protected renderCatalogActions(toolbar: HTMLElement, actions: CatalogActions) {
     toolbar.addClass("study-cards-section-controls");
     const more = toolbar.createEl("button", {
       cls: "study-cards-section-menu",
@@ -120,8 +119,6 @@ export class PrototypeView extends StudyView {
       const { left, bottom } = more.getBoundingClientRect();
       menu.showAtPosition({ x: left, y: bottom }, more.ownerDocument);
     };
-    sourceRow.addClass("study-cards-source-row");
-    sourceRow.createEl("button", { text: "Добавить источники" }).onclick = actions.addSources;
   }
 
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {

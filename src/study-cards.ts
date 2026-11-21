@@ -903,11 +903,27 @@ export class StudyCards {
   preview(sectionId: string, requests: SourceRequest[], replaceSourceId?: string) {
     this.section(sectionId, this.catalog.data);
     return new EnrollmentPreview(requests.map((request) => ({ ...request })),
-      (sources, getChoice, previous, affected) => this.plan(sectionId, sources, getChoice, this.catalog.data, previous, affected),
-      (sources, rows, getChoice) => this.run("connectSources", () => this.enroll(sectionId, sources, rows, getChoice, replaceSourceId)));
+      (sources, getChoice, previous, affected) => {
+        const { data } = this.catalog;
+        return this.plan(this.section(sectionId, data), sources, getChoice, data, previous, affected);
+      },
+      (sources, rows, getChoice) => this.run("connectSources",
+        () => this.enroll(this.section(sectionId), sources, rows, getChoice, replaceSourceId)));
   }
 
-  private async plan(sectionId: string, requests: SourceRequest[], getChoice: PreviewChoice,
+  previewFirstSection(requests: SourceRequest[]) {
+    return new EnrollmentPreview(requests.map((request) => ({ ...request })),
+      (sources, getChoice, previous, affected) => this.plan(undefined, sources, getChoice, this.catalog.data, previous, affected),
+      (sources, rows, getChoice, name) => this.run("connectSources", async () => {
+        const title = name?.trim();
+        if (!title) throw new Error(t("enterSectionName"));
+        if (this.data.sections.length) throw new StaleStudyState();
+        const section: Section = { id: this.newId(), name: title, sources: [] };
+        return this.enroll(section, sources, rows, getChoice);
+      }));
+  }
+
+  private async plan(section: Section | undefined, requests: SourceRequest[], getChoice: PreviewChoice,
     data: StudyData, previous: PlannedRow[] = [], affected?: ReadonlySet<string>) {
     const paths = this.vault.markdownFiles().sort((a, b) => a.localeCompare(b));
     const rows: PlannedRow[] = [];
@@ -931,12 +947,12 @@ export class StudyCards {
       if (!note) continue;
       const items = sources.map((source) => {
         const request = requests[source]!;
-        const existing = request.kind === "folder" && this.section(sectionId, data).sources.some((item) =>
+        const existing = request.kind === "folder" && section?.sources.some((item) =>
           item.kind === "folder" && item.path === request.path && item.excluded.includes(path));
         const choice = getChoice(source, path);
         return {
           source, choice, checked: choice.checked ?? (request.kind === "file" || (note.marked && !existing)),
-          excluded: choice.checked === false || (choice.checked === undefined && existing),
+          excluded: choice.checked === false || (choice.checked === undefined && Boolean(existing)),
         };
       });
       const defaults = [
@@ -963,16 +979,16 @@ export class StudyCards {
     return rows;
   }
 
-  private async enroll(sectionId: string, requests: SourceRequest[], rows: PlannedRow[], getChoice: PreviewChoice,
+  private async enroll(section: Section, requests: SourceRequest[], rows: PlannedRow[], getChoice: PreviewChoice,
     replaceSourceId?: string) {
-    const section = this.section(sectionId);
+    const firstSection = !this.data.sections.includes(section);
     const replaced = section.sources.find(({ id }) => id === replaceSourceId);
     if (replaceSourceId && (!replaced || requests.length !== 1 || requests[0]?.kind !== replaced.kind)) {
       throw new StaleStudyState();
     }
     const missingFolders = () => requests.flatMap(({ kind, path }) =>
       kind === "folder" && !this.vault.folderExists(path) ? [path] : []);
-    const latest = await this.plan(sectionId, requests, getChoice, this.data);
+    const latest = await this.plan(section, requests, getChoice, this.data);
     const stale = new Set(missingFolders());
     if (replaced && requests[0]?.kind === "file" && !latest.some(({ checked }) => checked)) stale.add(requests[0].path);
     const key = ({ path, source }: PlannedRow) => JSON.stringify([source, path]);
@@ -988,6 +1004,9 @@ export class StudyCards {
     if (stale.size) return { confirmed: false, paths: [...stale] } as const;
 
     const eligible = new Map(latest.filter(({ checked }) => checked).map((row) => [row.path, row]));
+    if (firstSection && !eligible.size && !requests.some(({ kind }) => kind === "folder")) {
+      throw new StaleStudyState();
+    }
     for (const row of eligible.values()) {
       const note = new MarkdownNote(row.path, row.text);
       try {
@@ -1029,6 +1048,7 @@ export class StudyCards {
       };
       section.sources = [...section.sources.filter(({ id }) => id !== source.id && id !== replaceSourceId), source];
     });
+    if (firstSection) this.data.sections.push(section);
     const paths = new Set([...this.index.keys(), ...latest.map(({ path }) => path)]);
     for (const path of paths) await this.reconcile(path);
     return { confirmed: true } as const;
@@ -1046,7 +1066,8 @@ export class EnrollmentPreview {
     private readonly requests: SourceRequest[],
     private readonly plan: (sources: SourceRequest[], getChoice: PreviewChoice,
       previous: PlannedRow[], affected?: ReadonlySet<string>) => Promise<PlannedRow[]>,
-    private readonly apply: (sources: SourceRequest[], rows: PlannedRow[], getChoice: PreviewChoice) => Promise<Confirmation>,
+    private readonly apply: (sources: SourceRequest[], rows: PlannedRow[], getChoice: PreviewChoice,
+      sectionName?: string) => Promise<Confirmation>,
   ) {}
 
   private choice = (source: number, path: string) => this.choices.get(source)?.get(path) ?? {};
@@ -1092,7 +1113,7 @@ export class EnrollmentPreview {
     return this.rows;
   }
 
-  confirm(): Promise<Confirmation> {
-    return this.apply(this.requests, this.rows, this.choice);
+  confirm(sectionName?: string): Promise<Confirmation> {
+    return this.apply(this.requests, this.rows, this.choice, sectionName);
   }
 }

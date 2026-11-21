@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Modal, Notice, type App, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Modal, Notice, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 import { FreeCheckView } from "./free-check-view";
 import { reviewDue } from "./interval-queue";
 import { IntervalView } from "./interval-view";
@@ -7,7 +7,8 @@ import type { Status } from "./markdown";
 import { configureNoteQuestions } from "./note-questions-modal";
 import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
 import { renderStudyStorage } from "./study-storage-view";
-import type { Card, StudyCards } from "./study-cards";
+import type { Card, SourceRequest, StudyCards } from "./study-cards";
+import type { Section } from "./study-state";
 
 export const viewType = "study-cards";
 
@@ -17,18 +18,24 @@ export interface CatalogActions {
   createCard(): void;
 }
 
+const panes = ["practice", "cards", "notes"] as const;
+type Pane = typeof panes[number];
+
 export class StudyView extends ItemView {
   private unsubscribe?: () => void;
   private isOpen = false;
   private answers = new Component();
   private readonly freeCheck: FreeCheckView;
   private readonly interval: IntervalView;
+  private pane: Pane = "practice";
+  private firstCheckSection?: string;
+  private readonly expanded = new Map<Pane, Set<string | null>>();
 
   constructor(leaf: WorkspaceLeaf, protected readonly study: StudyCards, private readonly watch: WatchVault,
     protected readonly openNote: (path: string) => Promise<void>) {
     super(leaf);
     this.freeCheck = new FreeCheckView(this.app, study, this.contentEl, () => { if (this.isOpen) this.render(); },
-      (root, card) => this.renderMarkdown(root, card));
+      (root, card) => this.renderMarkdown(root, card), () => this.showPractice());
     this.interval = new IntervalView(study, this.contentEl, () => { if (this.isOpen) this.render(); },
       (root, card) => this.renderMarkdown(root, card));
   }
@@ -39,6 +46,7 @@ export class StudyView extends ItemView {
 
   async onOpen() {
     this.isOpen = true;
+    this.pane = "practice";
     this.unsubscribe = this.study.subscribe(() => this.render());
     this.render();
   }
@@ -47,58 +55,130 @@ export class StudyView extends ItemView {
     this.isOpen = false;
     this.unsubscribe?.();
     this.interval.close();
+    this.freeCheck.close();
     this.removeChild(this.answers);
+  }
+
+  connectNotes(requests: SourceRequest[] = []) {
+    const target = this.study.activeSection ?? {
+      onConnected: () => {
+        this.firstCheckSection = this.study.activeSection ?? undefined;
+        if (this.isOpen) this.showPractice();
+      },
+    };
+    new SelectSourcesModal(this.app, this.study, this.watch, target, requests).open();
   }
 
   protected render() {
     this.interval.clearTimer();
+    if (this.freeCheck.refreshSetup()) return;
     const root = this.contentEl;
-    const opened = new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card")));
+    const previous = root.dataset.studyPane as Pane | undefined;
+    if (previous) {
+      this.expanded.set(previous, new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card"))));
+    }
+    const active = root.ownerDocument.activeElement;
+    const focus = root.contains(active) ? active?.getAttribute("data-focus") : undefined;
+    const opened = this.expanded.get(this.pane) ?? new Set<string | null>();
     this.resetAnswers();
     root.empty();
     root.addClass("study-cards-view");
-    renderStudyStorage(this.app, root, this.study, opened);
+    delete root.dataset.studyPane;
+    const { problem, saving } = this.study.persistence;
+    if (problem || saving) renderStudyStorage(this.app, root, this.study, opened);
     if (this.renderAlternateScreen(root)) return;
 
-    const toolbar = root.createDiv({ cls: "study-cards-controls" });
+    root.dataset.studyPane = this.pane;
     const createSection = () => new SectionModal(this.app, this.study).open();
     const sectionId = this.study.activeSection;
     const section = this.study.sections.find(({ id }) => id === sectionId);
-    if (this.study.sections.length) {
-      const label = toolbar.createEl("label", { text: t("section") + " " });
-      const select = label.createEl("select", { attr: { "aria-label": t("studySection"), "data-focus": "section" } });
-      for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
-      select.value = section?.id ?? "";
-      select.onchange = () => this.perform(this.study.openSection(select.value));
-    }
     if (!section) {
-      toolbar.createEl("button", { text: t("newSection") }).onclick = createSection;
-      root.createEl("p", { text: t("createSectionFirst") });
-      return;
+      const firstUse = root.createDiv({ cls: "study-cards-first-use" });
+      firstUse.createEl("p", { text: t("connectFirstNotes") });
+      const actions = firstUse.createDiv({ cls: "study-cards-controls" });
+      const connect = actions.createEl("button", { text: t("connectNotes"), cls: "mod-cta", attr: { "data-focus": "connect" } });
+      connect.disabled = Boolean(problem) || saving;
+      connect.onclick = () => this.connectNotes();
+      const empty = actions.createEl("button", { text: t("newSection") });
+      empty.disabled = connect.disabled;
+      empty.onclick = createSection;
+    } else {
+      this.renderNavigation(root);
+      const toolbar = root.createDiv({ cls: "study-cards-section-controls" });
+      const label = toolbar.createEl("label", { text: t("studySection") });
+      const select = label.createEl("select", { attr: { "data-focus": "section" } });
+      for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
+      select.value = section.id;
+      select.onchange = () => {
+        this.perform(this.study.openSection(select.value).then(() => this.focusPaneControl("section")));
+      };
+      const actions = {
+        createSection,
+        addSources: () => this.connectNotes(),
+        createCard: () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open(),
+      };
+      if (this.pane === "practice") this.renderSectionActions(root, section.id, section.name, opened);
+      if (this.pane === "cards") {
+        this.renderCatalogActions(toolbar, actions);
+        this.renderCatalog(root, section.id, opened);
+      }
+      if (this.pane === "notes") this.renderSources(root, section, actions);
     }
-    this.renderSectionActions(root, section.id, section.name, opened);
+    if (!problem && !saving) {
+      renderStudyStorage(this.app, root.createDiv({ cls: "study-cards-data-tools" }), this.study, opened);
+    }
+    if (focus) this.focusPaneControl(focus);
+  }
 
-    const sourceRow = root.createDiv();
-    const sources = sourceRow.createEl("details", { attr: { "data-card": "sources" } });
-    this.renderCatalogActions(toolbar, sourceRow, {
-      createSection,
-      addSources: () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open(),
-      createCard: () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open(),
-    });
-    sources.open = opened.has("sources");
-    sources.createEl("summary", { text: t("sourceCount", { count: section.sources.length }) });
+  private renderNavigation(root: HTMLElement) {
+    const nav = root.createEl("nav", { cls: "study-cards-pane-nav", attr: { "aria-label": t("paneNavigation") } });
+    for (const pane of panes) {
+      const button = nav.createEl("button", { text: t(pane), attr: { "data-focus": pane } });
+      if (this.pane === pane) button.setAttribute("aria-current", "page");
+      button.onclick = () => this.showPane(pane);
+    }
+  }
+
+  private showPane(pane: Pane, focus: string = pane) {
+    this.pane = pane;
+    this.render();
+    this.focusPaneControl(focus);
+  }
+
+  private showPractice() {
+    this.pane = "practice";
+    this.render();
+    this.contentEl.querySelector<HTMLElement>(
+      '[data-focus="check-continue"], [data-focus="check-start"]:not(:disabled), [data-focus="connect"]:not(:disabled)',
+    )?.focus({ preventScroll: true });
+  }
+
+  private focusPaneControl(key: string) {
+    this.contentEl.querySelector<HTMLElement>(`[data-focus="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+  }
+
+  private renderSources(root: HTMLElement, section: Section, actions: CatalogActions) {
+    const header = root.createDiv({ cls: "study-cards-source-header" });
+    header.createEl("h2", { text: t("sourceCount", { count: section.sources.length }) });
+    const buttons = header.createDiv({ cls: "study-cards-controls" });
+    const add = buttons.createEl("button", { text: t("connectNotes"), cls: "mod-cta", attr: { "data-focus": "add-sources" } });
+    add.onclick = actions.addSources;
+    buttons.createEl("button", { text: t("newSection") }).onclick = actions.createSection;
+    this.renderErrors(root, section.id);
+    const sources = root.createDiv();
     const missing = new Set(this.study.missingSources(section.id).map(({ id }) => id));
-    if (missing.size) sources.open = true;
     for (const source of section.sources) {
-      const row = sources.createDiv({ cls: "study-cards-controls study-cards-item" });
       const path = source.path || t("vaultRoot");
-      row.createSpan({ text: source.recursive ? t("sourceWithSubfolders", { path }) : path });
+      const item = sources.createDiv({ cls: "study-cards-item" });
+      item.createDiv({ text: source.recursive ? t("sourceWithSubfolders", { path }) : path });
+      const row = item.createDiv({ cls: "study-cards-controls study-cards-source-actions" });
       if (missing.has(source.id)) {
         row.createSpan({ text: t("sourceUnavailable") });
         row.createEl("button", { text: t("reconnect") }).onclick = () =>
           new SelectSourcesModal(this.app, this.study, this.watch, section.id, [], false, source).open();
       } else {
         const folder = source.kind === "folder";
+        if (!folder) row.createEl("button", { text: t("openNote") }).onclick = () => this.perform(this.openNote(source.path));
         row.createEl("button", {
           text: t(folder ? "configureQuestions" : "configure"),
           attr: { "aria-label": t("configureQuestionsFrom", { path }) },
@@ -108,7 +188,6 @@ export class StudyView extends ItemView {
       }
       row.createEl("button", { text: t("disconnect") }).onclick = () => this.perform(this.study.removeSource(section.id, source.id));
     }
-    this.renderCatalog(root, section.id, opened);
   }
 
   protected renderAlternateScreen(root: HTMLElement): boolean {
@@ -116,14 +195,24 @@ export class StudyView extends ItemView {
   }
 
   protected renderSectionActions(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
-    this.interval.renderCatalog(root, sectionId, opened);
-    this.freeCheck.renderCatalog(root, sectionId, name, opened);
+    const practice = root.createDiv({ cls: "study-cards-practice" });
+    this.freeCheck.renderPractice(practice, sectionId, name, this.firstCheckSection === sectionId,
+      () => this.showPane("notes", "add-sources"), () => {
+        if (this.firstCheckSection === sectionId) this.firstCheckSection = undefined;
+      });
+    this.freeCheck.renderHistory(practice, sectionId, opened);
+    const study = practice.createDiv({ cls: "study-cards-practice-row" });
+    study.createEl("button", { text: t("study") }).onclick = () => this.showPane("cards", "cards-heading");
+    study.createEl("p", { text: t("studyHint") });
+    this.interval.renderCatalog(practice, sectionId, opened);
   }
 
-  protected renderCatalogActions(toolbar: HTMLElement, _sourceRow: HTMLElement, actions: CatalogActions) {
-    toolbar.createEl("button", { text: t("newSection") }).onclick = actions.createSection;
-    toolbar.createEl("button", { text: t("addSources") }).onclick = actions.addSources;
-    toolbar.createEl("button", { text: t("createCard"), cls: "mod-cta" }).onclick = actions.createCard;
+  protected renderCatalogActions(toolbar: HTMLElement, actions: CatalogActions) {
+    const group = toolbar.createDiv({ cls: "study-cards-controls" });
+    const create = group.createEl("button", { attr: { "aria-label": t("createCard"), title: t("createCard"), "data-focus": "create-card" } });
+    setIcon(create, "plus");
+    create.onclick = actions.createCard;
+    group.createEl("button", { text: t("newSection") }).onclick = actions.createSection;
   }
 
   protected resetAnswers() {
@@ -143,7 +232,7 @@ export class StudyView extends ItemView {
 
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
     const cards = this.study.cards(sectionId, "source");
-    root.createEl("h3", { text: t("cardCount", { count: cards.length }) });
+    root.createEl("h2", { text: t("cardCount", { count: cards.length }), attr: { tabindex: "-1", "data-focus": "cards-heading" } });
     this.renderErrors(root, sectionId);
     for (const card of cards) {
       const key = this.cardKey(card);

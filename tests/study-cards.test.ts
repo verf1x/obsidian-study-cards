@@ -87,6 +87,37 @@ async function testVault() {
   };
 }
 
+test("first enrollment previews without writing and connects both formats in one named section", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const collection = "HTTP.md";
+  const single = "ETag.md";
+  const original = "## Cache\nFirst answer\n";
+  await vault.files.create(collection, original);
+  await vault.files.create(single, "# ETag\nSecond answer\n");
+  const study = await vault.open();
+  const preview = study.previewFirstSection([
+    { kind: "file", path: collection, format: { mode: "collection", level: 2 } },
+    { kind: "file", path: single },
+  ]);
+  assert.equal((await preview.refresh()).flatMap(({ cards }) => cards).length, 2);
+  assert.deepEqual(study.sections, []);
+  assert.equal(await vault.files.read(collection), original);
+  assert.equal(await vault.files.read(single), "# ETag\nSecond answer\n");
+
+  const changed = original + "\n## Headers\nNew answer\n";
+  await vault.edit(collection, changed);
+  assert.deepEqual(await preview.confirm("Interview"), { confirmed: false, paths: [collection] });
+  assert.deepEqual(study.sections, []);
+  assert.equal(await vault.files.read(collection), changed);
+  assert.equal(await vault.files.read(single), "# ETag\nSecond answer\n");
+  assert.equal((await preview.refresh()).flatMap(({ cards }) => cards).length, 3);
+  assert.deepEqual(await preview.confirm("Interview"), { confirmed: true });
+  assert.deepEqual(study.sections.map(({ name }) => name), ["Interview"]);
+  assert.deepEqual(study.cards(study.activeSection!, "source").map(({ question }) => question), ["Cache", "Headers", "ETag"]);
+  assert.ok(study.cards(study.activeSection!).every(({ identity }) => identity === "valid"));
+});
+
 test("a connected collection keeps its selected questions after reopening", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
