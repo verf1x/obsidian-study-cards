@@ -124,7 +124,7 @@ export class StudyView extends ItemView {
   }
 
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
-    const cards = this.study.cards(sectionId);
+    const cards = this.study.cards(sectionId, "source");
     root.createEl("h3", { text: "Карточки · " + cards.length });
     this.renderErrors(root, sectionId);
     for (const card of cards) {

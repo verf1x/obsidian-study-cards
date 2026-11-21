@@ -671,4 +671,11 @@ test("свободная проверка выбирает вопросы по �
   await study.moveFreeCheck(mutation(), first.id, 1);
   assert.equal(study.freeChecks.session?.position, 1);
   await assert.rejects(study.moveFreeCheck(mutation(), first.id, 1), /Оцените текущий ответ/);
+  const [restored, current] = study.freeCheckQuestions();
+  await assert.rejects(study.gradeFreeCheck(mutation(), first.id, restored!.card!, "correct"), /изменились/);
+  await study.gradeFreeCheck(mutation(), first.id, current!.card!, "incorrect");
+  await study.gradeFreeCheck(mutation(), first.id, current!.card!, "correct");
+  assert.equal(study.freeCheckQuestions()[1]?.grade, "correct");
+  await study.moveFreeCheck(mutation(), first.id, 1);
+  assert.equal(study.freeChecks.session?.position, 2);
 });

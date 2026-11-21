@@ -1,6 +1,6 @@
 import { Modal, type App } from "obsidian";
 import { message } from "./source-modals";
-import type { CheckCard, CheckSelection } from "./free-check";
+import { checkRange, type CheckCard, type CheckSelection } from "./free-check";
 
 type OrderedSelection = Extract<CheckSelection, { order: string }>;
 
@@ -33,8 +33,7 @@ export class CheckSetupModal extends Modal {
     const update = () => {
       const cards = this.getCards();
       const random = order.value === "random";
-      const offset = random || !this.start ? 0 : cards.findIndex(({ id }) => id === this.start);
-      const maximum = offset < 0 ? 0 : cards.length - offset;
+      const { offset, maximum } = checkRange(cards, random ? "random" : "standard", this.start);
       count.max = String(maximum);
       count.value = maximum ? String(Math.min(requested, maximum)) : "";
       count.disabled = begin.disabled = saving || maximum === 0;

@@ -2,16 +2,22 @@ import type { Card } from "./study-cards";
 import type { FreeResult, FreeSession } from "./study-state";
 
 export type CheckCard = Card & { id: string };
+export type CheckOrder = "standard" | "random";
 
 export type CheckSelection =
-  | { order: "standard" | "random"; sectionId: string; count: number; start?: string }
+  | { order: CheckOrder; sectionId: string; count: number; start?: string }
   | { retryOf: string };
 
 export function isCheckCard(card: Card): card is CheckCard {
   return card.id !== null && card.identity === "valid" && card.status !== "invalid";
 }
 
-export function sampleCards(cards: readonly CheckCard[], order: "standard" | "random", count: number, offset: number) {
+export function checkRange(cards: readonly CheckCard[], order: CheckOrder, start?: string) {
+  const offset = order === "random" || !start ? 0 : cards.findIndex(({ id }) => id === start);
+  return { offset, maximum: offset < 0 ? 0 : cards.length - offset };
+}
+
+export function sampleCards(cards: readonly CheckCard[], order: CheckOrder, count: number, offset: number) {
   if (order === "standard") return cards.slice(offset, offset + count);
   const shuffled = [...cards];
   for (let index = 0; index < count; index++) {
@@ -22,7 +28,7 @@ export function sampleCards(cards: readonly CheckCard[], order: "standard" | "ra
 }
 
 export function canAdvance(session: FreeSession, available: boolean) {
-  return session.position < (session.reached ?? session.position)
+  return session.position < (session.furthestPosition ?? session.position)
     || !available || Boolean(session.grades[session.cardIds[session.position]!]);
 }
 

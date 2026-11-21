@@ -205,10 +205,9 @@ export class FreeCheckView {
     for (const [value, label] of [["correct", "Верно"], ["incorrect", "Ошибка"]] as const) {
       const button = actions.createEl("button", { text: label, attr: { "aria-pressed": String(grade === value), "data-grade": value } });
       button.disabled = this.blocked();
-      button.onclick = () => this.perform(async () => {
-        await this.study.saveFreeCheck({ id: globalThis.crypto.randomUUID(), revision },
-          { ...session, grades: { [card.id]: value } }, card);
-      }, () => this.renderAndFocus(`[data-grade="${value}"]`));
+      button.onclick = () => this.perform(
+        () => this.study.gradeFreeCheck({ id: globalThis.crypto.randomUUID(), revision }, session.id, card, value),
+        () => this.renderAndFocus(`[data-grade="${value}"]`));
     }
   }
 
@@ -218,14 +217,19 @@ export class FreeCheckView {
   }
 
   private confirmFinish(session: FreeSession, revision: string | null) {
-    const available = new Set(this.study.freeCheckQuestions().filter(({ card }) => card).map(({ id }) => id));
-    const { graded, ungraded, unavailable } = checkScore(session, available);
+    const graded = Object.keys(session.grades).length;
+    const ungraded = session.cardIds.length - graded;
     const prompt = `${coverage(graded, session.cardIds.length)}. Без оценки: ${ungraded}.`;
     new CheckPrompt(this.app, "Подтвердить итог?", prompt, [{
       label: "Подтвердить итог", primary: true, action: () => {
         const finishedAt = new Date().toISOString();
         this.perform(() => this.study.finishFreeCheck({ id: globalThis.crypto.randomUUID(), revision }, session.id, finishedAt),
-          () => this.showResult(session.id, graded ? undefined : { ...session, finishedAt, ungradedUnavailable: unavailable }));
+          () => {
+            if (graded) return this.showResult(session.id);
+            const available = new Set(this.study.cards(session.sectionId).filter(isCheckCard).map(({ id }) => id));
+            const { unavailable } = checkScore(session, available);
+            this.showResult(session.id, { ...session, finishedAt, ungradedUnavailable: unavailable });
+          });
       },
     }]).open();
   }

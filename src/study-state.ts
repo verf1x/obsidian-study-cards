@@ -54,7 +54,7 @@ interface FreeCheck {
 
 export interface FreeSession extends FreeCheck {
   position: number;
-  reached?: number;
+  furthestPosition?: number;
 }
 
 export interface FreeResult extends FreeCheck {
@@ -127,8 +127,8 @@ function freeCheck(value: unknown): value is FreeCheck {
 function freeSession(value: unknown): value is FreeSession {
   return record(value) && Number.isInteger(value.position) && Number(value.position) >= 0
     && freeCheck(value) && Number(value.position) < value.cardIds.length
-    && (value.reached === undefined || (Number.isInteger(value.reached)
-      && Number(value.reached) >= Number(value.position) && Number(value.reached) < value.cardIds.length));
+    && (value.furthestPosition === undefined || (Number.isInteger(value.furthestPosition)
+      && Number(value.furthestPosition) >= Number(value.position) && Number(value.furthestPosition) < value.cardIds.length));
 }
 
 function freeResult(value: unknown): value is FreeResult {
