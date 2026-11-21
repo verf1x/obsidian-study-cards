@@ -8,7 +8,7 @@ Mastery status and review suspension control whether a card is eligible for spac
 
 “Studied” and “Mastered” make a card eligible. An eligible card without a schedule is ready for its first review immediately. If its UUID is absent from the current session's fixed card list, the card joins the next session.
 
-The “Unstudied” status and review suspension both exclude a card from reviews. Suspension applies across all its study sections. When the card becomes eligible again, its saved due time still applies. If that time has passed, the card is ready for review immediately.
+The “Unstudied” status and review suspension both exclude a card from reviews. Suspension applies across all its study sections. When the card becomes eligible again, its saved due time still applies. If that time has been reached, the card is ready for review immediately.
 
 The schedule and history belong to the card identified by its UUID. Statistics count each grade in the study section from which the user started the session. Grading a spaced repetition answer preserves the manual mastery status.
 

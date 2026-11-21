@@ -2,7 +2,7 @@
 
 [Русская версия](#russian)
 
-An Obsidian plugin for studying questions from Markdown notes, testing recall, and reviewing cards at spaced intervals.
+An Obsidian plugin for studying questions from Markdown notes, running free checks, and reviewing cards at spaced intervals.
 
 ## Terms
 
@@ -12,7 +12,7 @@ A study question and its answer, taken from a note or one of its sections.
 
 **Card source**
 
-A note or a group of notes connected by the user so Study Cards can extract cards.
+A note or folder that the user connects so Study Cards can extract cards.
 
 **Study section**
 

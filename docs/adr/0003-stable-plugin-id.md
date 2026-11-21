@@ -2,7 +2,7 @@
 
 [Русская версия](#russian)
 
-The Community Directory name is **Study Cards**. The manifest ID and the installation folder name are both `study-cards`. This ID identifies the plugin by its folder name. Changing it after publication would require users to reinstall the plugin. [Manifest](https://docs.obsidian.md/Reference/Manifest) · [Community Directory FAQ](https://docs.obsidian.md/community-directory/faq)
+The Community Directory lists the plugin as **Study Cards** and uses `study-cards` for the manifest ID and installation folder name. This ID identifies the plugin by its folder name. Changing it after publication would require users to reinstall the plugin. [Manifest](https://docs.obsidian.md/Reference/Manifest) · [Community Directory FAQ](https://docs.obsidian.md/community-directory/faq)
 
 The `qcards` prefix in Markdown follows the metadata format from [#7](https://github.com/verf1x/obsidian-study-cards/issues/7). The official directory showed no exact match for the name `Study Cards` or the ID `study-cards` on November 20, 2026. [Directory snapshot](https://github.com/obsidianmd/obsidian-releases/blob/bb4f4b010362f2919f51215c4bf27d178bd5e257/community-plugins.json) · [Decision in #12](https://github.com/verf1x/obsidian-study-cards/issues/12)
 
