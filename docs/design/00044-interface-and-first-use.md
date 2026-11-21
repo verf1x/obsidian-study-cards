@@ -2,7 +2,7 @@
 
 [Design issue #44](https://github.com/verf1x/obsidian-study-cards/issues/44) · [Implementation issue #48](https://github.com/verf1x/obsidian-study-cards/issues/48)
 
-[Согласованные изменения после #48](00044-ux-follow-up.md)
+This document records the earlier prototype approved for #48. The current design for note enrollment, Practice, and manual selection is in the [UX follow-up](00044-ux-follow-up.md).
 
 ## Approved Orca prototype
 
