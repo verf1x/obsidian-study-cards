@@ -1,0 +1,52 @@
+name: Draft release
+
+on:
+  push:
+    tags: ["*.*.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Validate release tag
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main ||
+            { echo "The tag must point to a commit on main."; exit 1; }
+          node --input-type=module <<'JS'
+          import { readFileSync } from "node:fs";
+          const { version } = JSON.parse(readFileSync("manifest.json", "utf8"));
+          const { TAG: tag } = process.env;
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag) || tag !== version) {
+            throw new Error(`Expected tag x.y.z matching manifest.json, got "${tag}" for "${version}".`);
+          }
+          JS
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Create draft with installable files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" main.js manifest.json styles.css \
+            --verify-tag --draft --title "Study Cards $TAG" \
+            --notes "Acceptance pending. See docs/release.md."

@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --external:obsidian --format=cjs --target=es2020 --outfile=main.js",
+    "build": "node scripts/build.mjs",
     "prototype": "node scripts/prototype-vault.mjs",
     "test": "tsx --test tests/*.test.ts",
+    "test-vault": "node scripts/test-vault.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
