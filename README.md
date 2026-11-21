@@ -12,7 +12,7 @@ Create a study section and add Markdown files or folders. The preview shows whic
 
 ## Platform compatibility
 
-Study Cards 0.1.3 requires Obsidian 1.15.1. The [0.1.2 draft acceptance report](docs/acceptance/0.1.2.md) records local checks with Obsidian 1.15.1 on Windows 11, Arch Linux under WSL2 and Android 17 on a Pixel 8 Pro. Study Cards can also be installed on macOS and iOS. Compatibility on those platforms is unverified.
+Study Cards requires Obsidian 1.15.1. The [0.1.3 acceptance report](docs/acceptance/0.1.3.md) records checks on Windows 11, Arch Linux under WSL2 and Android 17 on a Pixel 8 Pro. Study Cards can also be installed on macOS and iOS. Compatibility on those platforms is unverified.
 
 ## Test vault
 
