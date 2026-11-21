@@ -97,6 +97,49 @@
   padding-bottom: 0.25rem;
 }
 
+.study-cards-question-settings,
+.study-cards-question-choice {
+  overflow-wrap: anywhere;
+}
+
+.study-cards-question-settings > p {
+  margin-block: 0 0.75rem;
+}
+
+.study-cards-question-hint {
+  color: var(--text-muted);
+}
+
+.study-cards-question-options {
+  justify-content: space-between;
+}
+
+.study-cards-question-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding-block: 0.25rem;
+  cursor: pointer;
+}
+
+.study-cards-question-choice input {
+  flex: none;
+  margin: 0;
+}
+
+.study-cards-question-list {
+  max-height: min(42vh, 24rem);
+  overflow: auto;
+  padding-inline: 0.25rem;
+  border-block: 1px solid var(--background-modifier-border);
+}
+
+.study-cards-question-actions {
+  justify-content: flex-end;
+  margin-block-start: 0.75rem;
+}
+
 .study-cards-form {
   display: grid;
   gap: 0.5rem;

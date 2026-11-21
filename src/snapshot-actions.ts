@@ -2,6 +2,7 @@
 const actions = {
   addSection: ["Добавление учебного раздела", "Study section added"],
   disconnectSource: ["Отключение источника", "Source disconnected"],
+  configureNoteQuestions: ["Изменение выбора вопросов", "Question selection changed"],
   refreshCatalog: ["Обновление каталога", "Catalog refreshed"],
   updateNote: ["Обновление заметки", "Note updated"],
   checkReviewSources: ["Проверка источников интервального повторения", "Spaced repetition sources checked"],
