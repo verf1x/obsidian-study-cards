@@ -88,7 +88,7 @@
 
 .study-cards-view .study-cards-section-title h2 {
   margin: 0;
-  font-size: var(--font-ui-larger);
+  font-size: var(--font-ui-large, 1.25rem);
 }
 
 .study-cards-section-title p,
@@ -126,13 +126,14 @@
 
 .study-cards-practice-resume { padding-block: 0.75rem; }
 
-.study-cards-view .study-cards-action-row {
+.study-cards-view :is(button, summary).study-cards-action-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.625rem;
   width: 100%;
-  padding: 0.625rem 0.5rem;
+  padding-block: 0.625rem;
+  padding-inline: 0.5rem;
   text-align: start;
   border: 0;
   border-block-end: 1px solid var(--background-modifier-border);
@@ -230,7 +231,7 @@
 }
 
 .study-cards-progress-strip [data-grade="correct"] { background: var(--text-success); }
-.study-cards-progress-strip [data-grade="incorrect"] { background: var(--text-error); }
+.study-cards-progress-strip [data-grade="incorrect"] { border-block-start: 3px dotted var(--text-error); }
 .study-cards-progress-strip [data-current="true"] { background: var(--interactive-accent); }
 
 .study-cards-question-source {

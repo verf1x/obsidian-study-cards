@@ -75,6 +75,7 @@ export class SelectSourcesModal extends Modal {
   private sectionName?: string;
   private noteQuery = "";
   private previewModal?: PreviewModal;
+  private refreshNoteChoices?: (change: VaultChange) => void;
 
   constructor(app: App, private readonly study: StudyCards, private readonly watch: WatchVault,
     private readonly section: string | FirstConnection, initial: SourceRequest[], private readonly lockSelection = false,
@@ -105,17 +106,32 @@ export class SelectSourcesModal extends Modal {
       this.setTitle(this.replacement ? t("reconnectSource") : this.lockSelection ? t("configureSource") : t("addSources"));
       this.contentEl.addClass("study-cards-source-modal");
     }
-    this.unsubscribe = this.watch(({ path, oldPath }) => {
-      if (!oldPath) return;
-      this.previousPreview?.rename(oldPath, path);
+    this.unsubscribe = this.watch((change) => {
+      const { path, oldPath } = change;
       let changed = false;
-      for (const request of this.requests) {
-        const nextPath = remapPath(request.path, oldPath, path);
-        if (nextPath === request.path) continue;
-        request.path = nextPath;
-        changed = true;
+      if (oldPath) {
+        this.previousPreview?.rename(oldPath, path);
+        for (const request of this.requests) {
+          const nextPath = remapPath(request.path, oldPath, path);
+          if (nextPath === request.path) continue;
+          request.path = nextPath;
+          changed = true;
+        }
       }
-      if (changed) this.render();
+      if (typeof this.section !== "string" && !this.app.vault.getAbstractFileByPath(path)) {
+        for (let index = this.requests.length - 1; index >= 0; index--) {
+          const request = this.requests[index]!;
+          if (request.path !== path && !request.path.startsWith(path + "/")) continue;
+          this.requests.splice(index, 1);
+          changed = true;
+        }
+      }
+      if (changed) {
+        const restoreFocus = typeof this.section !== "string" && this.section.container.contains(this.section.container.doc.activeElement);
+        this.render(restoreFocus ? "pick" : undefined);
+      } else {
+        this.refreshNoteChoices?.(change);
+      }
     });
     this.render(this.requests.length ? "preview" : "pick");
   }
@@ -123,6 +139,7 @@ export class SelectSourcesModal extends Modal {
   onClose() {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.refreshNoteChoices = undefined;
   }
 
   private render(focus?: "pick" | "preview", currentNote?: string) {
@@ -132,7 +149,7 @@ export class SelectSourcesModal extends Modal {
     root.empty();
     if (first) {
       root.createEl("h2", { text: t("chooseNotesForStudy") });
-      this.renderNoteChoices(root, scroll, currentNote);
+      this.renderNoteChoices(root, scroll, focus === "pick", currentNote);
     }
     for (const [index, source] of this.requests.entries()) {
       const item = root.createDiv({ cls: "study-cards-item" });
@@ -202,11 +219,12 @@ export class SelectSourcesModal extends Modal {
     if (focus === "preview") next.focus();
   }
 
-  private renderNoteChoices(root: HTMLElement, scroll: number, currentNote?: string) {
+  private renderNoteChoices(root: HTMLElement, scroll: number, focusSearch: boolean, currentNote?: string) {
     const search = root.createEl("input", { type: "search", value: this.noteQuery, placeholder: t("findNote"),
       attr: { "aria-label": t("findNote") } });
     const list = root.createDiv({ cls: "study-cards-enrollment-notes", attr: { role: "group", "aria-label": t("notes") } });
-    const files = this.app.vault.getMarkdownFiles().map(({ path }) => path).sort((a, b) => a.localeCompare(b));
+    const notePaths = () => this.app.vault.getMarkdownFiles().map(({ path }) => path).sort((a, b) => a.localeCompare(b));
+    let files = notePaths();
     const draw = (focus?: string) => {
       list.empty();
       const query = this.noteQuery.trim().toLocaleLowerCase();
@@ -214,7 +232,7 @@ export class SelectSourcesModal extends Modal {
       for (const path of files) {
         if (!path.toLocaleLowerCase().includes(query)) continue;
         const label = list.createEl("label", { cls: "study-cards-picker-option" });
-        const check = label.createEl("input", { type: "checkbox" });
+        const check = label.createEl("input", { type: "checkbox", attr: { "data-note-path": path } });
         check.checked = selected.has(path);
         label.createSpan({ text: path });
         check.onchange = () => {
@@ -234,8 +252,19 @@ export class SelectSourcesModal extends Modal {
       draw();
       list.scrollTop = 0;
     };
+    this.refreshNoteChoices = ({ path, oldPath }) => {
+      if (!oldPath && files.includes(path) === (this.app.vault.getFileByPath(path)?.extension.toLowerCase() === "md")
+        && !files.some((known) => known.startsWith(path + "/"))) return;
+      const focus = list.querySelector<HTMLInputElement>("input:focus")?.dataset.notePath;
+      const top = list.scrollTop;
+      files = notePaths();
+      draw(focus);
+      list.scrollTop = top;
+      if (focus && !list.contains(list.doc.activeElement)) search.focus();
+    };
     draw(currentNote);
     list.scrollTop = scroll;
+    if (focusSearch) search.focus();
   }
 
   private suggestSectionName() {

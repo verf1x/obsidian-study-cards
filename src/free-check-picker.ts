@@ -112,7 +112,7 @@ export class CardPicker {
         : pathMatches || question.toLocaleLowerCase().includes(query));
       if (!visible.length) continue;
       const group = this.list.createDiv({ cls: "study-cards-picker-note" });
-      const { row, input, text } = addOption(group, `note:${path}`, path);
+      const { row, input } = addOption(group, `note:${path}`, path);
       row.addClass("study-cards-picker-note-option");
       const checked = note.filter(({ id }) => this.selected.has(id)).length;
       const count = t("questionSelectionCount", { selected: checked, total: note.length });

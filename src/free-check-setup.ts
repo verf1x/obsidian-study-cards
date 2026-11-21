@@ -6,7 +6,7 @@ import { message } from "./source-modals";
 type SetupSelection = Extract<CheckSelection, { sectionId: string }>;
 type Method = CheckOrder | "manual";
 
-const methods = { random: "randomOrder", standard: "standardOrder", manual: "manualOrder" } as const;
+const methods = { random: "randomOrder", standard: "standardOrder", manual: "selectCheckCards" } as const;
 
 export class FreeCheckSetup {
   readonly root: HTMLFormElement;
@@ -77,7 +77,7 @@ export class FreeCheckSetup {
     footer.before(this.picker.root);
     this.cancel = buttons.createEl("button", { text: t("cancel"), cls: "study-cards-quiet-button", attr: { type: "button" } });
     this.cancel.onclick = close;
-    this.begin = buttons.createEl("button", { text: t("startCheck"), attr: { type: "submit" }, cls: "mod-cta" });
+    this.begin = buttons.createEl("button", { text: t("startFreeCheck"), attr: { type: "submit" }, cls: "mod-cta" });
     this.root.onsubmit = (event) => {
       event.preventDefault();
       if (!this.begin.disabled) void this.submit();

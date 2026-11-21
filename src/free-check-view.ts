@@ -70,14 +70,10 @@ export class FreeCheckView {
       actions.createEl("p", { text: t(cards.length ? "sectionWithoutEligibleCards" : "sectionWithoutCards") });
       actions.createEl("button", { text: t("notes") }).onclick = openNotes;
     }
-  }
-
-  renderHistory(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
-    const { results } = this.study.freeChecks;
-    const history = results.filter((result) => result.sectionId === sectionId).reverse();
-    const latest = history[0];
+    const history = this.study.freeChecks.results.filter((result) => result.sectionId === sectionId);
+    const latest = history[history.length - 1];
     if (latest) {
-      const available = new Set(this.study.cards(sectionId).filter(isCheckCard).map(({ id }) => id));
+      const available = new Set(cards.filter(isCheckCard).map(({ id }) => id));
       const { mistakes } = checkScore(latest, available);
       if (mistakes.some((id) => available.has(id))) {
         const retry = root.createEl("button");
@@ -86,11 +82,19 @@ export class FreeCheckView {
         retry.onclick = () => this.retry(latest);
       }
     }
+  }
+
+  renderHistory(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
+    const { results } = this.study.freeChecks;
+    const history = results.filter((result) => result.sectionId === sectionId).reverse();
+    const latest = history[0];
     const details = root.createEl("details", { attr: { "data-card": "check-history" } });
     details.open = opened.has("check-history");
     const visibleHistory = details.createEl("summary");
-    renderPaneAction(visibleHistory, "history", t("checkHistory"), latest
-      ? t("checkHistoryCount", { count: history.length }) : t("noCheckResults"));
+    const latestScore = latest ? checkScore(latest, new Set()) : undefined;
+    renderPaneAction(visibleHistory, "history", t("checkHistory"), latestScore && latest
+      ? t("checkHistoryScore", { graded: latestScore.graded, total: latest.cardIds.length, correct: latestScore.correct })
+      : t("noCheckResults"));
     for (const result of history) {
       const { correct, graded } = checkScore(result, new Set());
       const date = localization.date(result.finishedAt);
@@ -248,11 +252,15 @@ export class FreeCheckView {
     setIcon(exit.createSpan({ cls: "study-cards-nav-icon", attr: { "aria-hidden": "true" } }), "arrow-left");
     exit.createSpan({ text: t("backToPractice") });
     exit.onclick = () => this.practice();
-    const graded = Object.keys(session.grades).length;
+    const { correct, mistakes, graded } = checkScore(session, new Set());
     const position = t("checkPosition", { position: session.position + 1, total: session.cardIds.length });
     header.createEl("p", { cls: "study-cards-free-progress", text: position });
     const progress = panel.createDiv({ cls: "study-cards-progress-strip", attr: {
-      role: "img", "aria-label": t("checkQuestionProgress", { position: session.position + 1, total: session.cardIds.length, graded }),
+      role: "img", "aria-label": [
+        t("checkQuestionProgress", { position: session.position + 1, total: session.cardIds.length, graded }),
+        t("correctCount", { count: correct }),
+        t("mistakeCount", { count: mistakes.length }),
+      ].join(". "),
     } });
     for (const [index, cardId] of session.cardIds.entries()) {
       progress.createSpan({ attr: { "data-current": String(index === session.position), "data-grade": session.grades[cardId] ?? "" } });

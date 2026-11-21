@@ -95,7 +95,12 @@ export class StudyView extends ItemView {
 
   protected render() {
     this.interval.clearTimer();
-    if (this.firstConnection) return;
+    const connectedDuringEnrollment = this.firstConnection && this.study.activeSection && !this.firstConnection.confirming;
+    if (this.firstConnection && !connectedDuringEnrollment) return;
+    if (connectedDuringEnrollment) {
+      this.firstConnection?.closeFlow();
+      this.firstConnection = undefined;
+    }
     if (this.freeCheck.refreshSetup()) return;
     const root = this.contentEl;
     const previous = root.dataset.studyPane as Pane | undefined;
@@ -162,7 +167,8 @@ export class StudyView extends ItemView {
     if (this.pane === "notes" && !problem && !saving) {
       renderStudyStorage(this.app, root.createDiv({ cls: "study-cards-data-tools" }), this.study, opened);
     }
-    if (focus) this.focusPaneControl(focus);
+    if (connectedDuringEnrollment) this.focusPaneControl("check-start");
+    else if (focus) this.focusPaneControl(focus);
   }
 
   private renderNavigation(root: HTMLElement, active: Pane) {
