@@ -6,8 +6,6 @@
 
 web
 
-Study Cards runs in the Obsidian workspace using its HTML interface on desktop and mobile. The plugin targets Windows, macOS, Linux, Android, and iOS. The [0.1.3 acceptance report](docs/acceptance/0.1.3.md) documents testing on Windows, Linux under WSL2, and Android. macOS and iOS compatibility remains unverified.
-
 ## Users
 
 The primary audience is developers who already use Obsidian and prepare for technical interviews from their own question-and-answer notes. The same workflow supports other people who study from Obsidian notes, including learners preparing for technical exams.
@@ -22,8 +20,9 @@ Practice long-form answers from Markdown notes, check them against the full refe
 
 ## Operating Context
 
-- The user chooses notes or folders as card sources and groups them in named study sections. One note can yield a single card or a collection based on headings.
-- The end-to-end acceptance scenario uses a collection of 100 questions, a free check with 20 questions, and a separate retry of the mistakes.
+- Study Cards runs inside the Obsidian workspace on desktop and mobile. It targets Windows, macOS, Linux, Android, and iOS.
+- The user chooses notes or folders as card sources and groups them in named study sections. A single-card note yields one card. In a collection, each section at the selected heading level yields a card.
+- The end-to-end acceptance scenario uses a collection of 100 questions, a free check with 20 questions, and a mistake retry.
 - A learner can start a free check on a computer and resume it on a phone after syncing the vault files. [Shared study state](docs/adr/0006-shared-study-state.md)
 
 ## Capabilities and Constraints
@@ -41,7 +40,7 @@ Use the name **Study Cards** and the permanent plugin ID `study-cards`. [Naming 
 ## Evidence on Hand
 
 - The [test vault](fixtures/test-vault/) includes a 100-question HTTP collection, standalone notes, and reference answers with Markdown formatting and math.
-- The [acceptance report](docs/acceptance/0.1.3.md) records a free check, a separate mistake retry, and continuation after transferring vault files between Windows and Android.
+- The [0.1.3 acceptance report](docs/acceptance/0.1.3.md) covers Windows, Linux under WSL2, and Android. It records a free check, a mistake retry, and continuation after transferring vault files between Windows and Android. Compatibility on macOS and iOS remains unverified.
 
 ## Product Principles
 
