@@ -2,7 +2,8 @@ import { Component, ItemView, MarkdownRenderer, Modal, Notice, type App, type Wo
 import { FreeCheckView } from "./free-check-view";
 import { reviewDue } from "./interval-queue";
 import { IntervalView } from "./interval-view";
-import { statuses, type Status } from "./markdown";
+import { masteryLabels, t } from "./localization";
+import type { Status } from "./markdown";
 import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
 import { renderStudyStorage } from "./study-storage-view";
 import type { Card, StudyCards } from "./study-cards";
@@ -63,15 +64,15 @@ export class StudyView extends ItemView {
     const sectionId = this.study.activeSection;
     const section = this.study.sections.find(({ id }) => id === sectionId);
     if (this.study.sections.length) {
-      const label = toolbar.createEl("label", { text: "Раздел " });
-      const select = label.createEl("select", { attr: { "aria-label": "Учебный раздел", "data-focus": "section" } });
+      const label = toolbar.createEl("label", { text: t("section") + " " });
+      const select = label.createEl("select", { attr: { "aria-label": t("studySection"), "data-focus": "section" } });
       for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
       select.value = section?.id ?? "";
       select.onchange = () => this.perform(this.study.openSection(select.value));
     }
     if (!section) {
-      toolbar.createEl("button", { text: "Новый раздел" }).onclick = createSection;
-      root.createEl("p", { text: "Создайте учебный раздел, чтобы добавить заметки или папки." });
+      toolbar.createEl("button", { text: t("newSection") }).onclick = createSection;
+      root.createEl("p", { text: t("createSectionFirst") });
       return;
     }
     this.renderSectionActions(root, section.id, section.name, opened);
@@ -84,21 +85,22 @@ export class StudyView extends ItemView {
       createCard: () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open(),
     });
     sources.open = opened.has("sources");
-    sources.createEl("summary", { text: "Источники · " + section.sources.length });
+    sources.createEl("summary", { text: t("sourceCount", { count: section.sources.length }) });
     const missing = new Set(this.study.missingSources(section.id).map(({ id }) => id));
     if (missing.size) sources.open = true;
     for (const source of section.sources) {
       const row = sources.createDiv({ cls: "study-cards-controls study-cards-item" });
-      row.createSpan({ text: (source.path || "Корень хранилища") + (source.recursive ? " · с подпапками" : "") });
+      const path = source.path || t("vaultRoot");
+      row.createSpan({ text: source.recursive ? t("sourceWithSubfolders", { path }) : path });
       if (missing.has(source.id)) {
-        row.createSpan({ text: "Недоступен" });
-        row.createEl("button", { text: "Переподключить" }).onclick = () =>
+        row.createSpan({ text: t("sourceUnavailable") });
+        row.createEl("button", { text: t("reconnect") }).onclick = () =>
           new SelectSourcesModal(this.app, this.study, this.watch, section.id, [], false, source).open();
       } else if (source.kind === "folder") {
-        row.createEl("button", { text: "Настроить" }).onclick = () =>
+        row.createEl("button", { text: t("configure") }).onclick = () =>
           new SelectSourcesModal(this.app, this.study, this.watch, section.id, [source], true).open();
       }
-      row.createEl("button", { text: "Отключить" }).onclick = () => this.perform(this.study.removeSource(section.id, source.id));
+      row.createEl("button", { text: t("disconnect") }).onclick = () => this.perform(this.study.removeSource(section.id, source.id));
     }
     this.renderCatalog(root, section.id, opened);
   }
@@ -113,9 +115,9 @@ export class StudyView extends ItemView {
   }
 
   protected renderCatalogActions(toolbar: HTMLElement, _sourceRow: HTMLElement, actions: CatalogActions) {
-    toolbar.createEl("button", { text: "Новый раздел" }).onclick = actions.createSection;
-    toolbar.createEl("button", { text: "Добавить источники" }).onclick = actions.addSources;
-    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta" }).onclick = actions.createCard;
+    toolbar.createEl("button", { text: t("newSection") }).onclick = actions.createSection;
+    toolbar.createEl("button", { text: t("addSources") }).onclick = actions.addSources;
+    toolbar.createEl("button", { text: t("createCard"), cls: "mod-cta" }).onclick = actions.createCard;
   }
 
   protected resetAnswers() {
@@ -126,16 +128,16 @@ export class StudyView extends ItemView {
   protected renderErrors(root: HTMLElement, sectionId: string) {
     for (const { path, message } of this.study.errors(sectionId)) {
       const error = root.createDiv({ cls: "study-cards-item" });
-      error.createEl("p", { text: path + " · " + message });
-      error.createEl("button", { text: "Открыть заметку" }).onclick = () => this.perform(this.openNote(path));
-      error.createEl("button", { text: "Предпросмотр подключения" }).onclick = () =>
+      error.createEl("p", { text: t("noteError", { path, message }) });
+      error.createEl("button", { text: t("openNote") }).onclick = () => this.perform(this.openNote(path));
+      error.createEl("button", { text: t("enrollmentPreview") }).onclick = () =>
         new SelectSourcesModal(this.app, this.study, this.watch, sectionId, [{ kind: "file", path }]).open();
     }
   }
 
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
     const cards = this.study.cards(sectionId, "source");
-    root.createEl("h3", { text: "Карточки · " + cards.length });
+    root.createEl("h3", { text: t("cardCount", { count: cards.length }) });
     this.renderErrors(root, sectionId);
     for (const card of cards) {
       const key = this.cardKey(card);
@@ -167,13 +169,13 @@ export class StudyView extends ItemView {
 
   protected renderCardBody(root: HTMLElement, card: Card, includeExtraActions = true) {
     const actions = root.createDiv({ cls: "study-cards-controls study-cards-card-actions" });
-    actions.createEl("button", { text: card.path, attr: { "aria-label": "Открыть заметку " + card.path } }).onclick =
+    actions.createEl("button", { text: card.path, attr: { "aria-label": t("openNoteNamed", { path: card.path }) } }).onclick =
       () => this.perform(this.openNote(card.path));
-    const select = actions.createEl("label", { text: "Статус освоения " }).createEl("select");
+    const select = actions.createEl("label", { text: t("masteryStatus") + " " }).createEl("select");
     if (card.status === "invalid") {
-      select.createEl("option", { value: "invalid", text: "Некорректный статус" }).disabled = true;
+      select.createEl("option", { value: "invalid", text: t("invalidStatus") }).disabled = true;
     }
-    for (const [value, text] of Object.entries(statuses)) select.createEl("option", { value, text });
+    for (const [value, label] of Object.entries(masteryLabels)) select.createEl("option", { value, text: t(label) });
     select.value = card.status;
     select.onchange = () => {
       const status = select.value as Status;
@@ -182,11 +184,11 @@ export class StudyView extends ItemView {
     };
 
     if (card.identity === "duplicate" && card.id) {
-      actions.createEl("button", { text: "Разрешить конфликт UUID" }).onclick =
+      actions.createEl("button", { text: t("resolveUuidConflict") }).onclick =
         () => new DuplicateModal(this.app, this.study, card.id!).open();
     } else if (card.identity === "missing" || card.identity === "invalid") {
-      actions.createSpan({ text: card.identity === "missing" ? "UUID отсутствует" : "Некорректный UUID" });
-      actions.createEl("button", { text: "Создать новый ID" }).onclick = () => this.perform(this.study.repairId(card));
+      actions.createSpan({ text: card.identity === "missing" ? t("missingUuid") : t("invalidUuid") });
+      actions.createEl("button", { text: t("createNewId") }).onclick = () => this.perform(this.study.repairId(card));
     }
     if (includeExtraActions) this.renderCardActions(actions, card);
 
@@ -195,7 +197,7 @@ export class StudyView extends ItemView {
     const legacySchedule = reviewDue(card) ? undefined : card.progress?.schedule;
     if (reviews?.length || card.progress?.history !== undefined || legacySchedule !== undefined) {
       const results = root.createEl("details");
-      results.createEl("summary", { text: "Результаты и расписание" });
+      results.createEl("summary", { text: t("resultsAndSchedule") });
       if (reviews?.length) this.interval.renderCardReviews(results, reviews);
       if (card.progress?.history !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.history, null, 2) });
       if (legacySchedule !== undefined) results.createEl("pre", { text: JSON.stringify(legacySchedule, null, 2) });
@@ -222,7 +224,7 @@ export class StudyView extends ItemView {
           scroll.append(table);
         }
         scroll.addClass("study-cards-table-scroll");
-        const label = table.caption?.textContent?.trim() || (tables.length > 1 ? "Таблица " + (index + 1) : "Таблица");
+        const label = table.caption?.textContent?.trim() || (tables.length > 1 ? t("numberedTable", { number: index + 1 }) : t("table"));
         scroll.setAttrs({ tabindex: "0", role: "region", "aria-label": label });
       }
     } catch (error) {
@@ -239,14 +241,14 @@ class SectionModal extends Modal {
   constructor(app: App, private readonly study: StudyCards) { super(app); }
 
   onOpen() {
-    this.setTitle("Новый учебный раздел");
+    this.setTitle(t("newStudySection"));
     this.contentEl.addClass("study-cards-form-modal");
     const form = this.contentEl.createEl("form", { cls: "study-cards-form" });
-    const name = form.createEl("label", { text: "Название " }).createEl("input", { type: "text" });
+    const name = form.createEl("label", { text: t("name") + " " }).createEl("input", { type: "text" });
     name.required = true;
     name.focus();
     const error = form.createEl("p", { attr: { role: "status" } });
-    const submit = form.createEl("button", { type: "submit", text: "Создать раздел", cls: "mod-cta" });
+    const submit = form.createEl("button", { type: "submit", text: t("createSection"), cls: "mod-cta" });
     form.onsubmit = (event) => {
       event.preventDefault();
       submit.disabled = true;
@@ -262,28 +264,28 @@ class DuplicateModal extends Modal {
   constructor(app: App, private readonly study: StudyCards, private readonly id: string) { super(app); }
 
   onOpen() {
-    this.setTitle("Конфликт UUID");
+    this.setTitle(t("uuidConflict"));
     this.contentEl.addClass("study-cards-form-modal");
     const cards = this.study.duplicates(this.id);
     if (cards.length < 2) {
-      this.contentEl.createEl("p", { text: "Конфликт уже решён." });
+      this.contentEl.createEl("p", { text: t("conflictResolved") });
       return;
     }
     const selectCard = (label: string) => {
       const select = this.contentEl.createEl("label", { cls: "study-cards-form", text: label }).createEl("select");
-      select.createEl("option", { value: "", text: "Выберите карточку" }).disabled = true;
+      select.createEl("option", { value: "", text: t("chooseCard") }).disabled = true;
       cards.forEach((card, index) => select.createEl("option", {
-        text: card.path + " · " + card.question + " · строка " + card.line,
+        text: t("duplicateCardLocation", { path: card.path, question: card.question, line: card.line }),
         value: String(index),
       }));
       select.value = "";
       return select;
     };
-    const keep = selectCard("Сохранить историю у");
-    const change = selectCard("Изменить карточку");
+    const keep = selectCard(t("keepHistoryFor"));
+    const change = selectCard(t("changeCard"));
     const actions = this.contentEl.createDiv({ cls: "study-cards-controls" });
-    const renew = actions.createEl("button", { text: "Выдать новый UUID", cls: "mod-cta" });
-    const trash = actions.createEl("button", { text: "Переместить заметку в корзину", cls: "mod-warning" });
+    const renew = actions.createEl("button", { text: t("assignNewUuid"), cls: "mod-cta" });
+    const trash = actions.createEl("button", { text: t("trashNote"), cls: "mod-warning" });
     const update = () => {
       renew.disabled = keep.value === "" || change.value === "" || keep.value === change.value;
       const card = cards[Number(change.value)];
@@ -314,9 +316,9 @@ class TrashModal extends Modal {
   constructor(app: App, private readonly path: string, private readonly confirm: () => void) { super(app); }
 
   onOpen() {
-    this.setTitle("Переместить заметку в корзину?");
+    this.setTitle(t("confirmTrashNote"));
     this.contentEl.createEl("p", { text: this.path });
-    this.contentEl.createEl("button", { text: "Переместить в корзину хранилища", cls: "mod-warning" }).onclick = () => {
+    this.contentEl.createEl("button", { text: t("moveToVaultTrash"), cls: "mod-warning" }).onclick = () => {
       this.close();
       this.confirm();
     };

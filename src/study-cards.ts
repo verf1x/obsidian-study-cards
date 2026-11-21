@@ -1,8 +1,10 @@
 import type { CardProgress, FreeGrade, FreeSession, IntervalReview, KnownNote, ReviewSchedule, Section, Source, SourceRequest, StudyData } from "./study-state";
+import { storedAction, type StudyAction } from "./snapshot-actions";
 import { StaleStudyState, StudyStorage, type ImportPreview, type StudyMutation } from "./study-storage";
 import { MarkdownNote, sameFormat, single, type Format, type MarkdownCard, type Status } from "./markdown";
 import { canAdvance, checkRange, checkScore, isCheckCard, sampleCards, type CheckSelection } from "./free-check";
 import { isReviewCard, reviewDue, reviewQueue } from "./interval-queue";
+import { t } from "./localization";
 
 export interface StudyVault {
   markdownFiles(): string[];
@@ -17,14 +19,14 @@ export interface StudyVault {
 export type { CardProgress, Source, SourceRequest } from "./study-state";
 
 export type ProgressMutation = Pick<StudyMutation, "id" | "revision">;
-const unreadableNote = "Заметка недоступна для чтения";
+const unreadableNote = Symbol("unreadable note");
 
 interface IndexedNote {
   note: MarkdownNote;
   format: Format;
   cards: Card[];
   sections: string[];
-  error?: string;
+  error?: string | typeof unreadableNote;
 }
 
 export interface Card extends MarkdownCard {
@@ -119,7 +121,7 @@ function previousIds(cards: MarkdownCard[], known: KnownNote | undefined, format
 
 class ChangedNote extends Error {
   constructor(readonly path: string) {
-    super("Заметка изменилась или ещё сохраняется: " + path);
+    super(t("changedNote", { path }));
   }
 }
 
@@ -218,9 +220,9 @@ export class StudyCards {
   chooseStudyVersion(token: number, id: string) { return this.storageAction(() => this.storage.choose(token, id)); }
   restoreStudyData(token: number, useBackup: boolean) { return this.storageAction(() => this.storage.restore(token, useBackup)); }
 
-  private run<T>(description: string, action: () => Promise<T>, options?: { background: boolean }): Promise<T>;
-  private run(description: string, action: () => Promise<void>, options: { mutation: ProgressMutation }): Promise<void>;
-  private run<T>(description: string, action: () => Promise<T>, options: { background?: boolean; mutation?: ProgressMutation } = {}) {
+  private run<T>(description: StudyAction, action: () => Promise<T>, options?: { background: boolean }): Promise<T>;
+  private run(description: StudyAction, action: () => Promise<void>, options: { mutation: ProgressMutation }): Promise<void>;
+  private run<T>(description: StudyAction, action: () => Promise<T>, options: { background?: boolean; mutation?: ProgressMutation } = {}) {
     const mutation = options.mutation;
     return this.enqueue(async () => {
       const token = this.storage.token;
@@ -241,7 +243,7 @@ export class StudyCards {
             this.saving = true;
             this.notify();
           }
-          await this.storage.commit({ id: mutation?.id ?? this.newId(), revision: base.revision, action: description }, () => this.data);
+          await this.storage.commit({ id: mutation?.id ?? this.newId(), revision: base.revision, action: storedAction(description) }, () => this.data);
           this.data = this.storage.state.data;
           published = true;
         }
@@ -260,15 +262,15 @@ export class StudyCards {
 
   private section(id: string, data = this.data) {
     const section = data.sections.find((item) => item.id === id);
-    if (!section) throw new Error("Учебный раздел не найден");
+    if (!section) throw new Error(t("sectionNotFound"));
     return section;
   }
 
   async addSection(name: string) {
     const id = this.newId();
-    await this.run("Добавление учебного раздела", async () => {
+    await this.run("addSection", async () => {
       const title = name.trim();
-      if (!title) throw new Error("Введите название учебного раздела");
+      if (!title) throw new Error(t("enterSectionName"));
       this.data.sections.push({ id, name: title, sources: [] });
     });
     await this.openSection(id);
@@ -284,7 +286,7 @@ export class StudyCards {
   }
 
   removeSource(sectionId: string, sourceId: string) {
-    return this.run("Отключение источника", async () => {
+    return this.run("disconnectSource", async () => {
       const section = this.section(sectionId);
       const removed = section.sources.find(({ id }) => id === sourceId);
       section.sources = section.sources.filter(({ id }) => id !== sourceId);
@@ -399,7 +401,7 @@ export class StudyCards {
     const formats = this.formats(note, memberships.map(({ source }) => source.format));
     const format = formats[0]!;
     if (note.error || formats.length > 1) {
-      this.indexNote(note, format, sections, note.error ?? "Выберите формат в предпросмотре подключения");
+      this.indexNote(note, format, sections, note.error ?? t("selectFormatInPreview"));
       return;
     }
     const known = this.data.knownNotes[path];
@@ -426,11 +428,11 @@ export class StudyCards {
   }
 
   scan() {
-    return this.run("Обновление каталога", () => this.scanIndex(true), { background: true });
+    return this.run("refreshCatalog", () => this.scanIndex(true), { background: true });
   }
 
   update(path: string) {
-    return this.run("Обновление заметки", () => this.reconcile(path), { background: true });
+    return this.run("updateNote", () => this.reconcile(path), { background: true });
   }
 
   recheckIntervalSource(path: string) {
@@ -444,7 +446,7 @@ export class StudyCards {
   }
 
   private recheckIntervalSources(paths: string[]) {
-    return this.run("Проверка источников интервального повторения", async () => {
+    return this.run("checkReviewSources", async () => {
       for (const path of paths) await this.reconcile(path, false, undefined, false);
     }, { background: true });
   }
@@ -454,14 +456,14 @@ export class StudyCards {
   }
 
   delete(path: string) {
-    return this.run("Удаление заметки", async () => {
+    return this.run("deleteNote", async () => {
       for (const key of this.index.keys()) if (hasPath(key, path)) this.removeFromIndex(key);
       if (this.data.sections.some(({ sources }) => sources.some((source) => hasPath(source.path, path)))) this.catalogChangeCount++;
     }, { background: true });
   }
 
   rename(oldPath: string, newPath: string) {
-    return this.run("Перемещение источника", async () => {
+    return this.run("moveSource", async () => {
       if (this.storage.problem) {
         this.catalogChangeCount++;
         await this.scanIndex(false);
@@ -536,7 +538,8 @@ export class StudyCards {
 
   errors(sectionId: string) {
     return [...this.catalog.index.entries()].flatMap(([path, entry]) =>
-      entry.error && entry.sections.includes(sectionId) ? [{ path, message: entry.error }] : []);
+      entry.error && entry.sections.includes(sectionId)
+        ? [{ path, message: entry.error === unreadableNote ? t("unreadableNote") : entry.error }] : []);
   }
 
   duplicates(id: string) {
@@ -556,7 +559,7 @@ export class StudyCards {
   }
 
   setStatus(selected: Card, status: Status) {
-    return this.run("Изменение статуса освоения", async () => {
+    return this.run("changeMastery", async () => {
       const { entry } = this.currentCard(selected);
       const saved = await this.write(entry.note, (note) => note.setStatus(entry.format, selected.index, status));
       await this.reconcile(selected.path, false, saved);
@@ -567,7 +570,7 @@ export class StudyCards {
     const { entry } = this.currentCard(selected);
     const current = this.allCards().find((card) => card.path === selected.path && card.index === selected.index);
     if (!current?.id || current.identity !== "valid" || current.status === "invalid") {
-      throw new Error("Исправьте UUID и статус освоения карточки");
+      throw new Error(t("repairUuidAndStatus"));
     }
     const note = await this.read(current.path);
     if (!note || note.source !== entry.note.source || this.vault.hasUnsavedChanges(current.path, note.source)) {
@@ -577,7 +580,7 @@ export class StudyCards {
   }
 
   saveProgress(selected: Card, progress: CardProgress) {
-    return this.run("Изменение прогресса карточки", async () => {
+    return this.run("changeProgress", async () => {
       const id = await this.verifyCard(selected);
       if (JSON.stringify(selected.progress) !== JSON.stringify(this.data.progress[id])) throw new StaleStudyState();
       this.data.progress[id] = { ...this.data.progress[id], ...progress };
@@ -586,7 +589,7 @@ export class StudyCards {
 
   recordReview(mutation: ProgressMutation, selected: Card,
     review: Omit<IntervalReview, "id" | "previousSchedule" | "order">, schedule: ReviewSchedule) {
-    return this.run("Интервальная оценка", async () => {
+    return this.run("gradeReview", async () => {
       const id = await this.verifyCard(selected);
       const prior = this.data.progress[id];
       const current = { ...selected, progress: prior };
@@ -645,7 +648,7 @@ export class StudyCards {
   }
 
   undoReview(mutation: ProgressMutation, uuid: string, sessionId: string, reviewId: string) {
-    return this.run("Отмена интервальной оценки", async () => {
+    return this.run("undoReview", async () => {
       const last = this.reviewToUndo(sessionId, this.data);
       if (last?.uuid !== uuid || last.review.id !== reviewId) throw new StaleStudyState();
       this.data.progress[uuid] = {
@@ -655,7 +658,7 @@ export class StudyCards {
   }
 
   setSuspended(mutation: ProgressMutation, selected: Card, suspended: boolean) {
-    return this.run(suspended ? "Приостановка повторений" : "Возобновление повторений", async () => {
+    return this.run(suspended ? "suspendReviews" : "resumeReviews", async () => {
       const id = await this.verifyCard(selected);
       this.data.progress[id] = { ...this.data.progress[id], suspended };
     }, { mutation });
@@ -670,7 +673,7 @@ export class StudyCards {
   }
 
   startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
-    return this.run("Начало свободной проверки", async () => {
+    return this.run("startFreeCheck", async () => {
       if ((this.data.freeSession?.id ?? null) !== previousId) throw new StaleStudyState();
       const result = "retryOf" in selection ? this.data.freeResults.find(({ id }) => id === selection.retryOf) : undefined;
       if ("retryOf" in selection && !result) throw new StaleStudyState();
@@ -680,13 +683,13 @@ export class StudyCards {
       if ("order" in selection) {
         const { offset, maximum } = checkRange(cards, selection.order, selection.start);
         if (!Number.isInteger(selection.count) || selection.count < 1 || selection.count > maximum) {
-          throw new Error("Изменилось количество доступных вопросов. Проверьте настройки проверки.");
+          throw new Error(t("questionCountChanged"));
         }
         cardIds = sampleCards(cards, selection.order, selection.count, offset).map(({ id }) => id);
       } else {
         const available = new Set(cards.map(({ id }) => id));
         cardIds = checkScore(result!, available).mistakes;
-        if (!cardIds.some((id) => available.has(id))) throw new Error("Все вопросы с ошибками недоступны.");
+        if (!cardIds.some((id) => available.has(id))) throw new Error(t("allMistakesUnavailable"));
       }
       this.data.freeSession = {
         id: mutation.id, sectionId, startedAt, retryOf: result?.id ?? null, cardIds, position: 0, furthestPosition: 0, grades: {},
@@ -701,14 +704,14 @@ export class StudyCards {
   }
 
   moveFreeCheck(mutation: ProgressMutation, sessionId: string, direction: -1 | 1) {
-    return this.run("Переход к вопросу свободной проверки", async () => {
+    return this.run("moveFreeCheck", async () => {
       const session = this.freeSession(sessionId);
       const position = session.position + direction;
       if (position < 0 || position >= session.cardIds.length) throw new StaleStudyState();
       if (direction === 1) {
         const id = session.cardIds[session.position];
         const available = this.sectionCards(session.sectionId).some((card) => card.id === id && isCheckCard(card));
-        if (!canAdvance(session, available)) throw new Error("Оцените текущий ответ, чтобы перейти дальше.");
+        if (!canAdvance(session, available)) throw new Error(t("gradeBeforeMoving"));
       }
       session.furthestPosition = Math.max(session.furthestPosition ?? session.position, position);
       session.position = position;
@@ -716,7 +719,7 @@ export class StudyCards {
   }
 
   gradeFreeCheck(mutation: ProgressMutation, sessionId: string, selected: Card, grade: FreeGrade) {
-    return this.run("Оценка ответа свободной проверки", async () => {
+    return this.run("gradeFreeCheck", async () => {
       const session = this.freeSession(sessionId);
       if (selected.id !== session.cardIds[session.position]
         || !this.index.get(selected.path)?.sections.includes(session.sectionId)) throw new StaleStudyState();
@@ -726,7 +729,7 @@ export class StudyCards {
   }
 
   saveFreeCheck(mutation: ProgressMutation, session: FreeSession) {
-    return this.run("Сохранение свободной проверки", async () => {
+    return this.run("saveFreeCheck", async () => {
       const previous = this.data.freeSession;
       if (previous && (previous.id !== session.id || previous.sectionId !== session.sectionId
         || previous.startedAt !== session.startedAt || previous.retryOf !== session.retryOf
@@ -735,7 +738,7 @@ export class StudyCards {
       for (const [id, grade] of Object.entries(session.grades)) {
         if (previous?.grades[id] === grade) continue;
         const card = cards.find((item) => item.id === id);
-        if (!card) throw new Error("Вопрос пока недоступен.");
+        if (!card) throw new Error(t("questionUnavailable"));
         await this.verifyCard(card);
       }
       const furthestPosition = Math.max(session.furthestPosition ?? session.position, previous?.furthestPosition ?? previous?.position ?? 0);
@@ -744,7 +747,7 @@ export class StudyCards {
   }
 
   finishFreeCheck(mutation: ProgressMutation, sessionId: string, finishedAt: string) {
-    return this.run("Завершение свободной проверки", async () => {
+    return this.run("finishFreeCheck", async () => {
       const session = this.freeSession(sessionId);
       const { position: _position, furthestPosition: _furthest, ...result } = session;
       const available = new Set(this.sectionCards(session.sectionId).filter(isCheckCard).map(({ id }) => id));
@@ -755,27 +758,27 @@ export class StudyCards {
   }
 
   discardFreeCheck(mutation: ProgressMutation, sessionId: string) {
-    return this.run("Отказ от свободной проверки", async () => {
+    return this.run("discardFreeCheck", async () => {
       this.freeSession(sessionId);
       this.data.freeSession = null;
     }, { mutation });
   }
 
   repairId(selected: Card) {
-    return this.run("Исправление UUID", async () => {
+    return this.run("repairUuid", async () => {
       const { entry, card } = this.currentCard(selected);
-      if (card.id) throw new Error("У карточки уже есть UUID");
+      if (card.id) throw new Error(t("cardAlreadyHasUuid"));
       const saved = await this.write(entry.note, (note) => note.setId(entry.format, card.index, this.newId()));
       await this.reconcile(card.path, false, saved);
     });
   }
 
   resolveDuplicate(keep: Card, change: Card, action: "new-id" | "trash") {
-    return this.run("Разрешение конфликта UUID", async () => {
+    return this.run("resolveUuidConflict", async () => {
       const winner = this.currentCard(keep);
       const { entry, card } = this.currentCard(change);
       if (!winner.card.id || winner.card.id !== card.id || (keep.path === change.path && keep.index === change.index)) {
-        throw new Error("Карточки с одинаковым UUID больше не найдены");
+        throw new Error(t("duplicateCardsNotFound"));
       }
       const raw = await this.read(keep.path);
       if (!raw || raw.source !== winner.entry.note.source || this.vault.hasUnsavedChanges(keep.path, raw.source)) {
@@ -783,7 +786,7 @@ export class StudyCards {
       }
       if (action === "trash") {
         if (entry.format.mode !== "single" || keep.path === change.path) {
-          throw new Error("В коллекции можно заменить UUID выбранного вопроса");
+          throw new Error(t("collectionUuidRepair"));
         }
         await this.vault.trash(card.path, (text) => {
           if (text !== entry.note.source || this.vault.hasUnsavedChanges(card.path, text)) throw new ChangedNote(card.path);
@@ -797,14 +800,14 @@ export class StudyCards {
   }
 
   createCard(sectionId: string, filename: string, folder: string, format: Format, template: boolean) {
-    return this.run("Создание карточки", async () => {
+    return this.run("createCard", async () => {
       const section = this.section(sectionId);
       const name = filename.trim().replace(/\.md$/i, "");
       if (!name || name === "." || name === ".." || /[\\/:*?"<>|\r\n]/.test(name)) {
-        throw new Error("Введите допустимое имя Markdown-файла");
+        throw new Error(t("enterValidFilename"));
       }
       const path = (folder ? folder + "/" : "") + name + ".md";
-      const body = template ? "#".repeat(format.mode === "single" ? 1 : format.level) + " Вопрос\n\nОтвет\n" : "";
+      const body = template ? t("cardTemplate", { heading: "#".repeat(format.mode === "single" ? 1 : format.level) }) : "";
       const note = new MarkdownNote(path, body);
       const source = note.enroll(format, this.assign(note, format, undefined));
       await this.vault.create(path, source);
@@ -818,7 +821,7 @@ export class StudyCards {
     this.section(sectionId, this.catalog.data);
     return new EnrollmentPreview(requests.map((request) => ({ ...request })),
       (sources, getChoice, previous, affected) => this.plan(sectionId, sources, getChoice, this.catalog.data, previous, affected),
-      (sources, rows, getChoice) => this.run("Подключение источников", () => this.enroll(sectionId, sources, rows, getChoice, replaceSourceId)));
+      (sources, rows, getChoice) => this.run("connectSources", () => this.enroll(sectionId, sources, rows, getChoice, replaceSourceId)));
   }
 
   private async plan(sectionId: string, requests: SourceRequest[], getChoice: PreviewChoice,

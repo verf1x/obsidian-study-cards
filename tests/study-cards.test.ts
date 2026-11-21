@@ -6,9 +6,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { IntervalSession } from "../src/interval-session";
+import { setInterfaceLanguage } from "../src/localization";
 import { StudyCards, type StudyVault } from "../src/study-cards";
 
 import { SharedWriteNotApplied, StudyStorage, type StudyStorageIO } from "../src/study-storage";
+
+setInterfaceLanguage("ru");
 
 async function testVault() {
   const root = await mkdtemp(join(tmpdir(), "study-cards-"));
@@ -459,6 +462,41 @@ test("создаёт заметки с шаблоном и без него и в
   assert.ok(study.cards(section).find(({ path }) => path === empty)?.id);
   await assert.rejects(study.createCard(section, "Пустая", "Курс", { mode: "single", question: "heading" }, true));
   assert.equal(study.cards(section).filter(({ path }) => path === blank).length, 1);
+});
+
+test("new templates follow the plugin language and old cards keep their Markdown and progress", async (t) => {
+  const vault = await testVault();
+  t.after(async () => {
+    setInterfaceLanguage("ru");
+    await vault.cleanup();
+  });
+  const russian = await vault.open();
+  await russian.addSection("Мой раздел");
+  const section = russian.activeSection!;
+  const single = { mode: "single", question: "heading" } as const;
+  const collection = { mode: "collection", level: 2 } as const;
+  const existing = await russian.createCard(section, "Первая", "", single, true);
+  const russianCollection = await russian.createCard(section, "Коллекция", "", collection, true);
+  const card = russian.cards(section).find(({ path }) => path === existing)!;
+  await russian.setStatus(card, "studied");
+  const original = await vault.files.read(existing);
+  assert.ok(original.includes("# Вопрос\n\nОтвет\n"));
+  assert.ok((await vault.files.read(russianCollection)).includes("## Вопрос\n"));
+
+  setInterfaceLanguage("fr");
+  const english = await vault.open();
+  await english.scan();
+  const reopened = english.cards(section).find(({ path }) => path === existing)!;
+  assert.equal(english.sections[0]!.name, "Мой раздел");
+  assert.equal(reopened.id, card.id);
+  assert.equal(reopened.status, "studied");
+  assert.equal(await vault.files.read(existing), original);
+  const newSingle = await english.createCard(section, "Single", "", single, true);
+  const newCollection = await english.createCard(section, "Collection", "", collection, true);
+  assert.ok((await vault.files.read(newSingle)).includes("# Question\n\nAnswer\n"));
+  assert.ok((await vault.files.read(newCollection)).includes("## Question\n"));
+  assert.deepEqual(english.cards(section).filter(({ path }) => path === newCollection).map(({ question, answer }) => [question, answer]),
+    [["Question", "Answer"]]);
 });
 
 test("сохраняет историю при переименовании, отключении, удалении и возврате UUID", async (t) => {

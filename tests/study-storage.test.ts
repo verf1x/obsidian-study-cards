@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { createLocalization, setInterfaceLanguage } from "../src/localization";
 import { SharedWriteNotApplied, StudyStorage, type StudyStorageIO } from "../src/study-storage";
+
+setInterfaceLanguage("ru");
 
 function device(file: { raw: string | null }) {
   let local: unknown;
@@ -40,6 +43,27 @@ function device(file: { raw: string | null }) {
     failNextSharedRead() { failRead = true; },
   };
 }
+
+test("historical snapshot captions are translated without changing the saved snapshot", async () => {
+  const source = { raw: null as string | null };
+  const desktop = await device(source).open();
+  await desktop.commit({ id: randomUUID(), revision: null, action: "Импорт снимка" }, (draft) => {
+    draft.sections.push({ id: randomUUID(), name: "Мой раздел", sources: [] });
+  });
+  const original = source.raw;
+  const exported = await desktop.export();
+  const english = createLocalization("en-GB");
+  const russian = createLocalization("ru");
+  const destination = await device({ raw: null }).open();
+  const preview = await destination.previewImport(exported);
+  assert.equal(preview.incoming.action, "Импорт снимка");
+  assert.equal(english.snapshotAction(preview.incoming.action), "Snapshot imported");
+  assert.equal(russian.snapshotAction(preview.incoming.action), "Импорт снимка");
+  assert.equal(english.snapshotAction("Получено с другого устройства"), "Получено с другого устройства");
+  await destination.import(preview);
+  assert.deepEqual(destination.state.data, desktop.state.data);
+  assert.equal(source.raw, original);
+});
 
 test("повторяет прерванную миграцию и сохраняет UUID, расписание и последний открытый раздел", async () => {
   const file = { raw: null as string | null };

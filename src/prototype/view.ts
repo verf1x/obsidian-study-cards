@@ -1,5 +1,5 @@
 import { Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import { statuses } from "../markdown";
+import { masteryLabels, t } from "../localization";
 import type { WatchVault } from "../source-modals";
 import type { Card, StudyCards } from "../study-cards";
 import { StudyView, type CatalogActions } from "../study-view";
@@ -236,7 +236,7 @@ export class PrototypeView extends StudyView {
   protected renderCardSummary(root: HTMLElement, card: Card) {
     root.createSpan({
       cls: "study-cards-status",
-      text: card.status === "invalid" ? "Некорректный статус" : statuses[card.status],
+      text: card.status === "invalid" ? t("invalidStatus") : t(masteryLabels[card.status]),
       attr: { "data-status": card.status },
     });
   }

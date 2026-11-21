@@ -1,4 +1,5 @@
-import { Notice, Plugin, TFile, TFolder, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { getLanguage, Notice, Plugin, TFile, TFolder, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { setInterfaceLanguage, t } from "./localization";
 import { obsidianStudyStorage } from "./obsidian-study-storage";
 import { sharedStudyPath, StudyStorage } from "./study-storage";
 import { studyVault } from "./obsidian-vault";
@@ -17,21 +18,22 @@ export default class StudyCardsPlugin extends Plugin {
   };
 
   async onload() {
+    setInterfaceLanguage(getLanguage());
     const id = () => globalThis.crypto.randomUUID();
     const io = await obsidianStudyStorage(this.app, (close) => this.register(close));
     const storage = await StudyStorage.open(io, await this.loadData(), id);
     this.study = new StudyCards(studyVault(this.app), storage, id);
     this.registerView(viewType, (leaf) => this.createView(leaf, this.study, this.watch, this.openNote));
     this.addRibbonIcon("book-open", "Study Cards", () => this.perform(this.showView()));
-    this.addCommand({ id: "open-study-cards", name: "Открыть Study Cards", callback: () => this.perform(this.showView()) });
+    this.addCommand({ id: "open-study-cards", name: t("openStudyCards"), callback: () => this.perform(this.showView()) });
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
       const request = sourceRequest(file);
-      if (request) menu.addItem((item) => item.setTitle("Добавить в Study Cards").setIcon("book-open")
+      if (request) menu.addItem((item) => item.setTitle(t("addToStudyCards")).setIcon("book-open")
         .onClick(() => this.perform(this.addSources([request]))));
     }));
     this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => {
       const requests = files.flatMap((file) => sourceRequest(file) ?? []);
-      if (requests.length) menu.addItem((item) => item.setTitle("Добавить в Study Cards").setIcon("book-open")
+      if (requests.length) menu.addItem((item) => item.setTitle(t("addToStudyCards")).setIcon("book-open")
         .onClick(() => this.perform(this.addSources(requests))));
     }));
 
@@ -95,7 +97,7 @@ export default class StudyCardsPlugin extends Plugin {
     await this.showView();
     const section = this.study.activeSection;
     if (!section) {
-      new Notice("Создайте учебный раздел и выберите, куда добавить источники");
+      new Notice(t("chooseSectionForSources"));
       return;
     }
     new SelectSourcesModal(this.app, this.study, this.watch, section, requests).open();
@@ -103,7 +105,7 @@ export default class StudyCardsPlugin extends Plugin {
 
   private openNote = async (path: string) => {
     const file = this.app.vault.getFileByPath(path);
-    if (!file) throw new Error("Заметка не найдена: " + path);
+    if (!file) throw new Error(t("missingNoteAt", { path }));
     await this.app.workspace.getLeaf("tab").openFile(file, { active: true, state: { mode: "source" } });
   };
 

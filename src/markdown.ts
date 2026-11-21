@@ -1,4 +1,5 @@
 import { isCardId } from "./card-id";
+import { t } from "./localization";
 import MarkdownIt from "markdown-it";
 import { isMap, isScalar, isSeq, parseDocument, stringify, type YAMLMap, type YAMLSeq } from "yaml";
 
@@ -8,12 +9,6 @@ export type Format =
 export type Status = "new" | "studied" | "mastered";
 
 export const single: Format = { mode: "single", question: "heading" };
-export const statuses: Record<Status, string> = {
-  new: "Не изучена",
-  studied: "Изучена",
-  mastered: "Выучена",
-};
-
 const markdown = new MarkdownIt({ html: true });
 markdown.block.ruler.before("heading", "obsidian_comment", (state, start, end, silent) => {
   const line = (index: number) => state.src.slice(state.bMarks[index]! + state.tShift[index]!, state.eMarks[index]!);
@@ -103,7 +98,7 @@ export class MarkdownNote {
     this.properties = isMap(this.yaml.contents) ? this.yaml.contents : undefined;
     this.error = (this.yaml.errors.length || (this.yaml.contents && !this.properties)
       || (!hasFrontmatter && /^---[ \t]*\r?\n[^#\r\n]+:/.test(source.slice(this.bom))))
-      ? "Проверьте YAML-свойства заметки" : undefined;
+      ? t("checkNoteProperties") : undefined;
     this.marked = this.properties?.get("qcards_source") === true;
   }
 
@@ -282,7 +277,7 @@ export class MarkdownNote {
       } else if (node === undefined) {
         added.push(key + ": " + yamlValue(value));
       } else {
-        throw new Error("Не удалось обновить свойство " + key);
+        throw new Error(t("updatePropertyFailed", { property: key }));
       }
     }
     if (added.length) {
@@ -342,7 +337,7 @@ export class MarkdownNote {
       return this.writeProperties({ tags: [...tags, tag] });
     }
     const section = this.sections(format.level)[index];
-    if (!section) throw new Error("Секция карточки изменилась");
+    if (!section) throw new Error(t("cardSectionChanged"));
     const { id, heading, statusLine } = section;
     const from = statusLine?.from ?? id?.to ?? heading.after;
     const tags = statusLine?.match[1]?.split(/[ \t]+/).filter((value) => !statusTag.test(value)) ?? [];
