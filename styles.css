@@ -9,34 +9,56 @@
   margin-block: 0.75rem;
 }
 
-.study-cards-free-panel {
+:is(.study-cards-free-panel, .study-cards-interval-panel) {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
 }
 
-.study-cards-free-header {
+:is(.study-cards-free-header, .study-cards-interval-header) {
   justify-content: space-between;
 }
 
-.study-cards-free-body {
+:is(.study-cards-free-body, .study-cards-interval-body) {
   flex: 1;
   min-height: 0;
   overflow: auto;
   overflow-wrap: anywhere;
 }
 
-.study-cards-free-body img {
+:is(.study-cards-free-body, .study-cards-interval-body) img {
   max-width: 100%;
   height: auto;
 }
 
-.study-cards-free-footer {
+:is(.study-cards-free-footer, .study-cards-interval-footer) {
   display: grid;
   gap: 0.5rem;
   padding-block: 0.5rem;
   border-top: 1px solid var(--background-modifier-border);
+}
+
+.study-cards-interval-footer > button {
+  justify-self: start;
+}
+
+.study-cards-interval-statistics {
+  margin-block: 0.5rem;
+}
+
+.study-cards-interval-grades {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr));
+  gap: 0.5rem;
+}
+
+.study-cards-interval-grades button {
+  display: grid;
+  gap: 0.25rem;
+  height: auto;
+  min-height: 44px;
+  padding: 0.5rem;
 }
 
 .study-cards-free-grades button[aria-pressed="true"] {

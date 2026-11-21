@@ -1,5 +1,7 @@
 import { Component, ItemView, MarkdownRenderer, Modal, Notice, type App, type WorkspaceLeaf } from "obsidian";
 import { FreeCheckView } from "./free-check-view";
+import { reviewDue } from "./interval-queue";
+import { IntervalView } from "./interval-view";
 import { statuses, type Status } from "./markdown";
 import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
 import { renderStudyStorage } from "./study-storage-view";
@@ -18,11 +20,14 @@ export class StudyView extends ItemView {
   private isOpen = false;
   private answers = new Component();
   private readonly freeCheck: FreeCheckView;
+  private readonly interval: IntervalView;
 
   constructor(leaf: WorkspaceLeaf, protected readonly study: StudyCards, private readonly watch: WatchVault,
     protected readonly openNote: (path: string) => Promise<void>) {
     super(leaf);
     this.freeCheck = new FreeCheckView(this.app, study, this.contentEl, () => { if (this.isOpen) this.render(); },
+      (root, card) => this.renderMarkdown(root, card));
+    this.interval = new IntervalView(study, this.contentEl, () => { if (this.isOpen) this.render(); },
       (root, card) => this.renderMarkdown(root, card));
   }
 
@@ -39,10 +44,12 @@ export class StudyView extends ItemView {
   async onClose() {
     this.isOpen = false;
     this.unsubscribe?.();
+    this.interval.close();
     this.removeChild(this.answers);
   }
 
   protected render() {
+    this.interval.clearTimer();
     const root = this.contentEl;
     const opened = new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card")));
     this.resetAnswers();
@@ -96,9 +103,12 @@ export class StudyView extends ItemView {
     this.renderCatalog(root, section.id, opened);
   }
 
-  protected renderAlternateScreen(root: HTMLElement): boolean { return this.freeCheck.renderScreen(root); }
+  protected renderAlternateScreen(root: HTMLElement): boolean {
+    return this.interval.renderScreen(root) || this.freeCheck.renderScreen(root);
+  }
 
   protected renderSectionActions(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
+    this.interval.renderCatalog(root, sectionId, opened);
     this.freeCheck.renderCatalog(root, sectionId, name, opened);
   }
 
@@ -181,15 +191,17 @@ export class StudyView extends ItemView {
     if (includeExtraActions) this.renderCardActions(actions, card);
 
     void this.renderMarkdown(root.createDiv(), card);
-    if (card.progress) {
+    const legacySchedule = reviewDue(card) ? undefined : card.progress?.schedule;
+    if (card.progress?.history !== undefined || legacySchedule !== undefined) {
       const results = root.createEl("details");
       results.createEl("summary", { text: "Результаты и расписание" });
-      if (card.progress.history !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.history, null, 2) });
-      if (card.progress.schedule !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.schedule, null, 2) });
+      if (card.progress?.history !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.history, null, 2) });
+      if (legacySchedule !== undefined) results.createEl("pre", { text: JSON.stringify(legacySchedule, null, 2) });
     }
   }
 
   protected renderCardActions(root: HTMLElement, card: Card) {
+    this.interval.renderCardAction(root, card);
     const section = this.study.sections.find(({ id }) => id === this.study.activeSection);
     if (section) this.freeCheck.renderCardAction(root, card, section.id, section.name);
   }

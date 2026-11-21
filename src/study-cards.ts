@@ -2,6 +2,7 @@ import type { CardProgress, FreeGrade, FreeSession, IntervalReview, KnownNote, R
 import { StaleStudyState, StudyStorage, type ImportPreview, type StudyMutation } from "./study-storage";
 import { MarkdownNote, sameFormat, single, type Format, type MarkdownCard, type Status } from "./markdown";
 import { canAdvance, checkRange, checkScore, isCheckCard, sampleCards, type CheckSelection } from "./free-check";
+import { isReviewCard, reviewDue, reviewQueue } from "./interval-queue";
 
 export interface StudyVault {
   markdownFiles(): string[];
@@ -141,6 +142,7 @@ export class StudyCards {
   }
 
   get sections(): readonly Section[] { return this.catalog.data.sections; }
+  get progressRevision() { return this.catalog.revision; }
   get activeSection() {
     const saved = this.storage.activeSection;
     return this.sections.find(({ id }) => id === saved)?.id ?? this.sections[0]?.id ?? null;
@@ -547,10 +549,13 @@ export class StudyCards {
     return this.run("Интервальная оценка", async () => {
       const id = await this.verifyCard(selected);
       const prior = this.data.progress[id];
-      if (!this.index.get(selected.path)?.sections.includes(review.sectionId) || prior?.suspended) {
+      const current = { ...selected, progress: prior };
+      const due = reviewDue(current);
+      if (!this.index.get(selected.path)?.sections.includes(review.sectionId) || !isReviewCard(current)
+        || (due && due.getTime() > Date.parse(review.at))) {
         throw new StaleStudyState();
       }
-      const order = (this.lastReview(review.sessionId)?.order ?? 0) + 1;
+      const order = (this.lastReview(review.sessionId, this.data)?.review.order ?? 0) + 1;
       this.data.progress[id] = {
         ...prior, schedule,
         reviews: [...(prior?.reviews ?? []), { ...review, id: mutation.id, order, previousSchedule: prior?.schedule }],
@@ -558,21 +563,51 @@ export class StudyCards {
     }, { mutation });
   }
 
-  private lastReview(sessionId: string) {
-    let last: IntervalReview | undefined;
-    for (const { reviews } of Object.values(this.data.progress)) {
+  private lastReview(sessionId: string, data: StudyData) {
+    let last: { uuid: string; review: IntervalReview } | undefined;
+    for (const [uuid, { reviews }] of Object.entries(data.progress)) {
       for (const review of reviews ?? []) {
-        if (review.sessionId === sessionId && (!last || review.order > last.order)) last = review;
+        if (review.sessionId === sessionId && (!last || review.order > last.review.order)) last = { uuid, review };
       }
     }
     return last;
+  }
+
+  latestIntervalReview(sessionId: string) {
+    const { data } = this.catalog;
+    const last = this.lastReview(sessionId, data);
+    if (!last) return;
+    const reviews = data.progress[last.uuid]?.reviews;
+    if (reviews?.[reviews.length - 1]?.id === last.review.id) {
+      return { uuid: last.uuid, reviewId: last.review.id, revision: this.progressRevision };
+    }
+  }
+
+  intervalStatistics(sectionId: string | null, now: Date) {
+    const { data, index } = this.catalog;
+    const cards = sectionId === null ? this.allCards(data, index) : this.cards(sectionId);
+    const { ready, nextDue } = reviewQueue(cards.filter(isReviewCard), now);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+    const reviewed = new Set<string>();
+    let reviews = 0;
+    for (const [uuid, progress] of Object.entries(data.progress)) {
+      for (const review of progress.reviews ?? []) {
+        const at = Date.parse(review.at);
+        if ((sectionId === null || sectionId === review.sectionId) && at >= today && at < tomorrow) {
+          reviewed.add(uuid);
+          reviews++;
+        }
+      }
+    }
+    return { available: ready.length, cards: reviewed.size, reviews, ...(nextDue && { nextDue }) };
   }
 
   undoReview(mutation: ProgressMutation, uuid: string, sessionId: string, reviewId: string) {
     return this.run("Отмена интервальной оценки", async () => {
       const prior = this.data.progress[uuid];
       const latest = prior?.reviews?.[prior.reviews.length - 1];
-      if (!prior?.reviews || !latest || latest.id !== reviewId || this.lastReview(sessionId)?.id !== reviewId) {
+      if (!prior?.reviews || !latest || latest.id !== reviewId || this.lastReview(sessionId, this.data)?.review.id !== reviewId) {
         throw new StaleStudyState();
       }
       this.data.progress[uuid] = { ...prior, schedule: latest.previousSchedule, reviews: prior.reviews.slice(0, -1) };
