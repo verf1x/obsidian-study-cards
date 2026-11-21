@@ -6,6 +6,7 @@ export type CheckOrder = "standard" | "random";
 
 export type CheckSelection =
   | { order: CheckOrder; sectionId: string; count: number; start?: string }
+  | { sectionId: string; cardIds: readonly string[] }
   | { retryOf: string };
 
 export function isCheckCard(card: Card): card is CheckCard {

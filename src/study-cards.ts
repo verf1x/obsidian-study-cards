@@ -672,7 +672,10 @@ export class StudyCards {
     return session.cardIds.map((id) => ({ id, card: cards.get(id) ?? null, grade: session.grades[id] ?? null }));
   }
 
-  startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
+  async startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
+    if ("cardIds" in selection) {
+      await this.run("refreshCatalog", () => this.scanIndex(false), { background: true });
+    }
     return this.run("startFreeCheck", async () => {
       if ((this.data.freeSession?.id ?? null) !== previousId) throw new StaleStudyState();
       const result = "retryOf" in selection ? this.data.freeResults.find(({ id }) => id === selection.retryOf) : undefined;
@@ -686,6 +689,11 @@ export class StudyCards {
           throw new Error(t("questionCountChanged"));
         }
         cardIds = sampleCards(cards, selection.order, selection.count, offset).map(({ id }) => id);
+      } else if ("cardIds" in selection) {
+        const selected = new Set(selection.cardIds);
+        cardIds = cards.filter(({ id }) => selected.has(id)).map(({ id }) => id);
+        if (!selected.size) throw new Error(t("selectAtLeastOneCheckCard"));
+        if (cardIds.length !== selected.size) throw new Error(t("selectedCardsChanged"));
       } else {
         const available = new Set(cards.map(({ id }) => id));
         cardIds = checkScore(result!, available).mistakes;
