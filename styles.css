@@ -240,6 +240,8 @@
 }
 
 .study-cards-advanced-settings .setting-item-control { flex-wrap: wrap; }
+.study-cards-advanced-settings [hidden],
+.study-cards-recovery [hidden] { display: none; }
 
 .study-cards-view:has(> :is(.study-cards-enrollment, .study-cards-check-setup, .study-cards-free-panel, .study-cards-interval-panel)) {
   display: flex;
