@@ -5,6 +5,7 @@ import { IntervalView } from "./interval-view";
 import { masteryLabels, t } from "./localization";
 import type { Status } from "./markdown";
 import { configureNoteQuestions } from "./note-questions-modal";
+import { renderPaneAction } from "./pane-action";
 import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
 import { renderStudyStorage } from "./study-storage-view";
 import type { Card, SourceRequest, StudyCards } from "./study-cards";
@@ -19,8 +20,9 @@ export interface CatalogActions {
 }
 
 const panes = ["practice", "cards", "notes"] as const;
+const paneIcons = { practice: "circle-play", cards: "list", notes: "files" } as const;
 type Pane = typeof panes[number];
-const firstCheckSections = new WeakMap<StudyCards, string>();
+const firstCheckKey = "study-cards-first-check-section";
 
 export class StudyView extends ItemView {
   private unsubscribe?: () => void;
@@ -30,13 +32,15 @@ export class StudyView extends ItemView {
   private readonly interval: IntervalView;
   private pane: Pane = "practice";
   private readonly expanded = new Map<Pane, Set<string | null>>();
+  private catalogQuery = "";
+  private firstConnection?: SelectSourcesModal;
 
   constructor(leaf: WorkspaceLeaf, protected readonly study: StudyCards, private readonly watch: WatchVault,
     protected readonly openNote: (path: string) => Promise<void>) {
     super(leaf);
     this.freeCheck = new FreeCheckView(this.app, study, this.contentEl, () => { if (this.isOpen) this.render(); },
       (root, card) => this.renderMarkdown(root, card), () => this.showPractice(), (sectionId) => {
-        if (firstCheckSections.get(this.study) === sectionId) firstCheckSections.delete(this.study);
+        if (this.app.loadLocalStorage(firstCheckKey) === sectionId) this.app.saveLocalStorage(firstCheckKey, null);
       });
     this.interval = new IntervalView(study, this.contentEl, () => { if (this.isOpen) this.render(); },
       (root, card) => this.renderMarkdown(root, card));
@@ -58,22 +62,40 @@ export class StudyView extends ItemView {
     this.unsubscribe?.();
     this.interval.close();
     this.freeCheck.close();
+    this.firstConnection?.closeFlow();
+    this.firstConnection = undefined;
     this.removeChild(this.answers);
   }
 
   connectNotes(requests: SourceRequest[] = []) {
-    const target = this.study.activeSection ?? {
+    const section = this.study.activeSection;
+    if (section) {
+      new SelectSourcesModal(this.app, this.study, this.watch, section, requests).open();
+      return;
+    }
+    if (this.firstConnection?.confirming || this.study.persistence.problem || this.study.persistence.saving) return;
+    this.firstConnection?.closeFlow();
+    const root = this.contentEl;
+    root.empty();
+    this.pane = "practice";
+    this.renderNavigation(root, "practice");
+    const container = root.createDiv({ cls: "study-cards-enrollment" });
+    this.firstConnection = new SelectSourcesModal(this.app, this.study, this.watch, {
+      container,
       onConnected: () => {
+        this.firstConnection = undefined;
         const section = this.study.activeSection;
-        if (section) firstCheckSections.set(this.study, section);
+        if (section) this.app.saveLocalStorage(firstCheckKey, section);
         if (this.isOpen) this.showPractice();
       },
-    };
-    new SelectSourcesModal(this.app, this.study, this.watch, target, requests).open();
+      onCancel: () => this.showPane("practice", "connect"),
+    }, requests);
+    this.firstConnection.open();
   }
 
   protected render() {
     this.interval.clearTimer();
+    if (this.firstConnection) return;
     if (this.freeCheck.refreshSetup()) return;
     const root = this.contentEl;
     const previous = root.dataset.studyPane as Pane | undefined;
@@ -89,60 +111,76 @@ export class StudyView extends ItemView {
     delete root.dataset.studyPane;
     const { problem, saving } = this.study.persistence;
     if (problem || saving) renderStudyStorage(this.app, root, this.study, opened);
+    if (this.freeCheck.settingUp) this.renderNavigation(root, "practice");
     if (this.renderAlternateScreen(root)) return;
 
     root.dataset.studyPane = this.pane;
+    this.renderNavigation(root, this.pane);
     const createSection = () => new SectionModal(this.app, this.study).open();
     const sectionId = this.study.activeSection;
     const section = this.study.sections.find(({ id }) => id === sectionId);
     if (!section) {
       const firstUse = root.createDiv({ cls: "study-cards-first-use" });
+      firstUse.createEl("h2", { text: t("noConnectedNotes") });
       firstUse.createEl("p", { text: t("connectFirstNotes") });
       const actions = firstUse.createDiv({ cls: "study-cards-controls" });
       const connect = actions.createEl("button", { text: t("connectNotes"), cls: "mod-cta", attr: { "data-focus": "connect" } });
       connect.disabled = Boolean(problem) || saving;
       connect.onclick = () => this.connectNotes();
-      const empty = actions.createEl("button", { text: t("newSection") });
-      empty.disabled = connect.disabled;
-      empty.onclick = createSection;
+      if (this.pane === "notes") {
+        const empty = actions.createEl("button", { text: t("newSection") });
+        empty.disabled = connect.disabled;
+        empty.onclick = createSection;
+      }
     } else {
-      this.renderNavigation(root);
       const toolbar = root.createDiv({ cls: "study-cards-section-controls" });
-      const label = toolbar.createEl("label", { text: t("studySection") });
-      const select = label.createEl("select", { attr: { "data-focus": "section" } });
-      for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
-      select.value = section.id;
-      select.onchange = () => {
-        this.perform(this.study.openSection(select.value).then(() => this.focusPaneControl("section")));
-      };
+      const title = toolbar.createDiv({ cls: "study-cards-section-title" });
+      const heading = title.createEl("h2", { text: section.name });
+      if (this.study.sections.length > 1) {
+        heading.addClass("study-cards-section-choice");
+        heading.empty();
+        const select = heading.createEl("select", { attr: { "aria-label": t("studySection"), "data-focus": "section" } });
+        for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
+        select.value = section.id;
+        select.onchange = () => {
+          this.catalogQuery = "";
+          this.perform(this.study.openSection(select.value).then(() => this.focusPaneControl("section")));
+        };
+      }
       const actions = {
         createSection,
         addSources: () => this.connectNotes(),
         createCard: () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open(),
       };
-      if (this.pane === "practice") this.renderSectionActions(root, section.id, section.name, opened);
+      if (this.pane === "practice") this.renderSectionActions(root, section.id, section.name, opened, toolbar, title);
       if (this.pane === "cards") {
         this.renderCatalogActions(toolbar, actions);
         this.renderCatalog(root, section.id, opened);
       }
       if (this.pane === "notes") this.renderSources(root, section, actions);
     }
-    if (!problem && !saving) {
+    if (this.pane === "notes" && !problem && !saving) {
       renderStudyStorage(this.app, root.createDiv({ cls: "study-cards-data-tools" }), this.study, opened);
     }
     if (focus) this.focusPaneControl(focus);
   }
 
-  private renderNavigation(root: HTMLElement) {
+  private renderNavigation(root: HTMLElement, active: Pane) {
     const nav = root.createEl("nav", { cls: "study-cards-pane-nav", attr: { "aria-label": t("paneNavigation") } });
     for (const pane of panes) {
-      const button = nav.createEl("button", { text: t(pane), attr: { "data-focus": pane } });
-      if (this.pane === pane) button.setAttribute("aria-current", "page");
+      const button = nav.createEl("button", { attr: { "data-focus": pane } });
+      setIcon(button.createSpan({ cls: "study-cards-nav-icon", attr: { "aria-hidden": "true" } }), paneIcons[pane]);
+      button.createSpan({ text: t(pane) });
+      if (active === pane) button.setAttribute("aria-current", "page");
       button.onclick = () => this.showPane(pane);
     }
   }
 
   protected showPane(pane: Pane, focus: string = pane) {
+    if (!this.freeCheck.dismissSetup()) return;
+    if (this.firstConnection?.confirming) return;
+    this.firstConnection?.closeFlow();
+    this.firstConnection = undefined;
     this.pane = pane;
     this.render();
     if (!this.focusPaneControl(focus) && focus !== pane) this.focusPaneControl(pane);
@@ -201,15 +239,17 @@ export class StudyView extends ItemView {
     return this.interval.renderScreen(root) || this.freeCheck.renderScreen(root);
   }
 
-  protected renderSectionActions(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
+  protected renderSectionActions(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>,
+    toolbar: HTMLElement, title: HTMLElement) {
+    title.createEl("p", { text: t("sectionCardCount", { count: this.study.cards(sectionId).length }) });
     const practice = root.createDiv({ cls: "study-cards-practice" });
-    this.freeCheck.renderPractice(practice, sectionId, name, firstCheckSections.get(this.study) === sectionId,
+    this.freeCheck.renderPractice(practice, toolbar, sectionId, name, this.app.loadLocalStorage(firstCheckKey) === sectionId,
       () => this.showPane("notes", "add-sources"));
+    const study = practice.createEl("button");
+    renderPaneAction(study, "book-open", t("study"), t("studyHint"));
+    study.onclick = () => this.showPane("cards", "cards-heading");
+    this.interval.renderCatalog(practice, sectionId);
     this.freeCheck.renderHistory(practice, sectionId, opened);
-    const study = practice.createDiv({ cls: "study-cards-practice-row" });
-    study.createEl("button", { text: t("study") }).onclick = () => this.showPane("cards", "cards-heading");
-    study.createEl("p", { text: t("studyHint") });
-    this.interval.renderCatalog(practice, sectionId, opened);
   }
 
   protected renderCatalogActions(toolbar: HTMLElement, actions: CatalogActions) {
@@ -237,12 +277,33 @@ export class StudyView extends ItemView {
 
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
     const cards = this.study.cards(sectionId, "source");
-    root.createEl("h2", { text: t("cardCount", { count: cards.length }), attr: { tabindex: "-1", "data-focus": "cards-heading" } });
+    root.createEl("h2", { text: t("cards"), attr: { tabindex: "-1", "data-focus": "cards-heading" } });
+    root.createEl("p", { cls: "study-cards-catalog-count", text: t("sectionCardCount", { count: cards.length }) });
     this.renderErrors(root, sectionId);
-    for (const card of cards) {
+    const search = root.createEl("input", { cls: "study-cards-catalog-search", type: "search",
+      placeholder: t("catalogSearch"), attr: { "aria-label": t("catalogSearch"), "data-focus": "catalog-search" } });
+    search.value = this.catalogQuery;
+    const empty = root.createEl("p", { text: t("noCatalogMatches"), attr: { role: "status" } });
+    const list = root.createDiv({ cls: "study-cards-catalog-list" });
+    const rows = cards.map((card) => {
       const key = this.cardKey(card);
-      this.renderCard(root, card, key, opened.has(key));
-    }
+      const mounted = this.renderCard(list, card, key, opened.has(key), (summary) => {
+        renderPaneAction(summary, "file-text", card.question, card.path);
+      });
+      return { mounted, content: `${card.question}\n${card.path}`.toLocaleLowerCase() };
+    });
+    const filter = () => {
+      this.catalogQuery = search.value;
+      const query = search.value.trim().toLocaleLowerCase();
+      let visible = 0;
+      for (const { mounted, content } of rows) {
+        mounted.hidden = !content.includes(query);
+        if (!mounted.hidden) visible++;
+      }
+      empty.hidden = visible > 0;
+    };
+    search.oninput = filter;
+    filter();
   }
 
   protected cardKey(card: Card) { return card.path + ":" + (card.id ?? "") + ":" + card.index; }
@@ -263,6 +324,7 @@ export class StudyView extends ItemView {
     };
     details.ontoggle = renderAnswer;
     renderAnswer();
+    return details;
   }
 
   protected renderCardSummary(_summary: HTMLElement, _card: Card) {}

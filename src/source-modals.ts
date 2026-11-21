@@ -6,6 +6,8 @@ import { remapPath, type EnrollmentPreview, type PreviewRow, type Source, type S
 export type VaultChange = { path: string; oldPath?: string };
 export type WatchVault = (listener: (change: VaultChange) => void) => () => void;
 
+type FirstConnection = { container: HTMLElement; onConnected: () => void; onCancel: () => void };
+
 export function message(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -71,18 +73,38 @@ export class SelectSourcesModal extends Modal {
   private previousPreview?: EnrollmentPreview;
   private unsubscribe?: () => void;
   private sectionName?: string;
+  private noteQuery = "";
+  private previewModal?: PreviewModal;
 
   constructor(app: App, private readonly study: StudyCards, private readonly watch: WatchVault,
-    private readonly section: string | { onConnected: () => void }, initial: SourceRequest[], private readonly lockSelection = false,
+    private readonly section: string | FirstConnection, initial: SourceRequest[], private readonly lockSelection = false,
     private readonly replacement?: Source) {
     super(app);
     this.requests = initial.map((request) => ({ ...request }));
   }
 
+  open() {
+    if (typeof this.section === "string") super.open();
+    else this.onOpen();
+  }
+
+  close() {
+    if (typeof this.section === "string") super.close();
+    else this.onClose();
+  }
+
+  get confirming() { return this.previewModal?.confirming ?? false; }
+
+  closeFlow() {
+    this.previewModal?.close();
+    this.close();
+  }
+
   onOpen() {
-    this.setTitle(typeof this.section !== "string" ? t("connectNotes")
-      : this.replacement ? t("reconnectSource") : this.lockSelection ? t("configureSource") : t("addSources"));
-    this.contentEl.addClass("study-cards-source-modal");
+    if (typeof this.section === "string") {
+      this.setTitle(this.replacement ? t("reconnectSource") : this.lockSelection ? t("configureSource") : t("addSources"));
+      this.contentEl.addClass("study-cards-source-modal");
+    }
     this.unsubscribe = this.watch(({ path, oldPath }) => {
       if (!oldPath) return;
       this.previousPreview?.rename(oldPath, path);
@@ -100,15 +122,23 @@ export class SelectSourcesModal extends Modal {
 
   onClose() {
     this.unsubscribe?.();
+    this.unsubscribe = undefined;
   }
 
-  private render(focus?: "pick" | "preview") {
-    this.contentEl.empty();
+  private render(focus?: "pick" | "preview", currentNote?: string) {
+    const first = typeof this.section === "string" ? undefined : this.section;
+    const root = first?.container ?? this.contentEl;
+    const scroll = root.querySelector(".study-cards-enrollment-notes")?.scrollTop ?? 0;
+    root.empty();
+    if (first) {
+      root.createEl("h2", { text: t("chooseNotesForStudy") });
+      this.renderNoteChoices(root, scroll, currentNote);
+    }
     for (const [index, source] of this.requests.entries()) {
-      const item = this.contentEl.createDiv({ cls: "study-cards-item" });
+      const item = root.createDiv({ cls: "study-cards-item" });
       const headline = item.createDiv({ cls: "study-cards-controls" });
       headline.createEl("strong", { text: pathName(source.path) });
-      if (!this.lockSelection && !this.replacement) {
+      if (!this.lockSelection && !this.replacement && (!first || source.kind === "folder")) {
         const remove = headline.createEl("button", { text: t("remove"), attr: { "aria-label": t("removeNamedSource", { path: pathName(source.path) }) } });
         remove.onclick = () => {
           this.requests.splice(index, 1);
@@ -124,23 +154,25 @@ export class SelectSourcesModal extends Modal {
       }
       formatFields(item, source.format ?? single, (format) => { source.format = format; });
     }
-    const actions = this.contentEl.createDiv({ cls: "study-cards-controls" });
+    const actions = root.createDiv({ cls: first ? "study-cards-controls study-cards-enrollment-actions" : "study-cards-controls" });
     if (!this.lockSelection) {
       const pick = actions.createEl("button", {
-        text: this.replacement ? t("chooseNewPath") : t("chooseFileOrFolder"), cls: this.requests.length ? undefined : "mod-cta",
+        text: this.replacement ? t("chooseNewPath") : first ? t("findFolder") : t("chooseFileOrFolder"),
+        cls: !first && !this.requests.length ? "mod-cta" : undefined,
       });
-      pick.onclick = () => picker(this.app, this.replacement?.kind, (source) => {
+      pick.onclick = () => picker(this.app, first ? "folder" : this.replacement?.kind, (source) => {
         if (this.replacement) this.requests.splice(0, 1, { ...this.replacement, ...source });
         else if (!this.requests.some(({ path, kind }) => path === source.path && kind === source.kind)) this.requests.push(source);
         this.render(this.replacement ? "preview" : "pick");
       });
-      if (focus === "pick") pick.focus();
+      if (focus === "pick" && !first) pick.focus();
     }
-    if (typeof this.section !== "string") {
-      actions.createEl("button", { text: t("cancel") }).onclick = () => this.close();
+    if (first) {
+      actions.createEl("button", { text: t("cancel"), cls: "study-cards-quiet-button" }).onclick = first.onCancel;
     }
-    if (!this.requests.length) return;
+    if (!this.requests.length && !first) return;
     const next = actions.createEl("button", { text: t("preview"), cls: "mod-cta" });
+    next.disabled = !this.requests.length;
     next.onclick = () => {
       try {
         const target = this.section;
@@ -149,23 +181,61 @@ export class SelectSourcesModal extends Modal {
           : this.study.previewFirstSection(this.requests));
         if (this.previousPreview) preview.replaceSources(this.requests);
         const first = typeof target !== "string" ? {
+          ...target,
           name: this.sectionName ?? this.suggestSectionName(),
           onNameChange: (name: string) => { this.sectionName = name; },
-          onConnected: target.onConnected,
         } : undefined;
         const confirm = first ? t("connectAndCreateSection") : this.lockSelection ? t("save") : t("connect");
         const modal = new PreviewModal(this.app, this.watch, preview, confirm, () => {
+          this.previewModal = undefined;
           this.previousPreview = preview;
           this.requests.splice(0, this.requests.length, ...preview.sources.map((source) => ({ ...source })));
           this.open();
         }, first);
         this.close();
+        this.previewModal = modal;
         modal.open();
       } catch (error) {
         new Notice(message(error));
       }
     };
     if (focus === "preview") next.focus();
+  }
+
+  private renderNoteChoices(root: HTMLElement, scroll: number, currentNote?: string) {
+    const search = root.createEl("input", { type: "search", value: this.noteQuery, placeholder: t("findNote"),
+      attr: { "aria-label": t("findNote") } });
+    const list = root.createDiv({ cls: "study-cards-enrollment-notes", attr: { role: "group", "aria-label": t("notes") } });
+    const files = this.app.vault.getMarkdownFiles().map(({ path }) => path).sort((a, b) => a.localeCompare(b));
+    const draw = (focus?: string) => {
+      list.empty();
+      const query = this.noteQuery.trim().toLocaleLowerCase();
+      const selected = new Set(this.requests.filter(({ kind }) => kind === "file").map(({ path }) => path));
+      for (const path of files) {
+        if (!path.toLocaleLowerCase().includes(query)) continue;
+        const label = list.createEl("label", { cls: "study-cards-picker-option" });
+        const check = label.createEl("input", { type: "checkbox" });
+        check.checked = selected.has(path);
+        label.createSpan({ text: path });
+        check.onchange = () => {
+          if (check.checked) this.requests.push({ kind: "file", path });
+          else {
+            const index = this.requests.findIndex((request) => request.kind === "file" && request.path === path);
+            if (index >= 0) this.requests.splice(index, 1);
+          }
+          this.render(undefined, path);
+        };
+        if (path === focus) check.focus({ preventScroll: true });
+      }
+      if (!list.childElementCount) list.createEl("p", { text: t("noMatchingNotes") });
+    };
+    search.oninput = () => {
+      this.noteQuery = search.value;
+      draw();
+      list.scrollTop = 0;
+    };
+    draw(currentNote);
+    list.scrollTop = scroll;
   }
 
   private suggestSectionName() {
@@ -191,19 +261,29 @@ class PreviewModal extends Modal {
   private refreshAll = true;
   private busy = false;
   private openNow = false;
+  confirming = false;
 
   constructor(app: App, private readonly watch: WatchVault, private readonly preview: EnrollmentPreview,
     private readonly confirmLabel: string, private readonly goBack: () => void,
-    private readonly first?: { name: string; onNameChange: (name: string) => void; onConnected: () => void }) {
+    private readonly first?: FirstConnection & { name: string; onNameChange: (name: string) => void }) {
     super(app);
   }
 
+  open() { if (this.first) this.onOpen(); else super.open(); }
+  close() { if (this.first) this.onClose(); else super.close(); }
+
   onOpen() {
     this.openNow = true;
-    this.setTitle(t("enrollmentPreview"));
-    this.contentEl.addClass("study-cards-source-modal");
+    const root = this.first?.container ?? this.contentEl;
     if (this.first) {
-      const label = this.contentEl.createEl("label", { cls: "study-cards-form", text: t("studySection") });
+      root.empty();
+      root.createEl("h2", { text: t("enrollmentPreview") });
+    } else {
+      this.setTitle(t("enrollmentPreview"));
+      root.addClass("study-cards-source-modal");
+    }
+    if (this.first) {
+      const label = root.createEl("label", { cls: "study-cards-form", text: t("studySection") });
       this.name = label.createEl("input", { type: "text", value: this.first.name });
       this.name.required = true;
       this.name.oninput = () => {
@@ -211,21 +291,21 @@ class PreviewModal extends Modal {
         this.updateConfirm();
       };
       this.name.focus();
-      this.total = this.contentEl.createEl("p", { attr: { "aria-live": "polite" } });
+      this.total = root.createEl("p", { attr: { "aria-live": "polite" } });
     }
-    this.contentEl.createEl("p", { text: t("enrollmentNotice") });
-    this.list = this.contentEl.createDiv({
+    root.createEl("p", { text: t("enrollmentNotice") });
+    this.list = root.createDiv({
       cls: "study-cards-source-review",
       attr: { tabindex: "0", role: "region", "aria-label": t("enrollmentPreview") },
     });
-    this.feedback = this.contentEl.createEl("p", { attr: { role: "status" } });
-    const actions = this.contentEl.createDiv({ cls: "study-cards-dialog-actions" });
+    this.feedback = root.createEl("p", { attr: { role: "status" } });
+    const actions = root.createDiv({ cls: "study-cards-dialog-actions" });
     this.backButton = actions.createEl("button", { text: t("back") });
     this.backButton.onclick = () => {
       this.close();
       this.goBack();
     };
-    if (this.first) actions.createEl("button", { text: t("cancel") }).onclick = () => { if (!this.busy) this.close(); };
+    if (this.first) actions.createEl("button", { text: t("cancel") }).onclick = this.first.onCancel;
     this.confirm = actions.createEl("button", { text: this.confirmLabel, cls: "mod-cta" });
     this.confirm.onclick = () => { void this.submit(); };
     this.unsubscribe = this.watch(({ path, oldPath }) => {
@@ -280,7 +360,7 @@ class PreviewModal extends Modal {
 
   private async submit() {
     if (this.confirm.disabled) return;
-    this.busy = this.confirm.disabled = true;
+    this.confirming = this.busy = this.confirm.disabled = true;
     this.backButton.disabled = true;
     try {
       const result = await this.preview.confirm(this.name?.value);
@@ -293,7 +373,7 @@ class PreviewModal extends Modal {
     } catch (error) {
       this.feedback.textContent = message(error);
     } finally {
-      this.busy = false;
+      this.confirming = this.busy = false;
       this.backButton.disabled = false;
       this.refreshAll = true;
       await this.refresh();

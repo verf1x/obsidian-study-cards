@@ -2,6 +2,7 @@ import { Notice } from "obsidian";
 import { reviewDue } from "./interval-queue";
 import { IntervalSession, type ReviewQuestion } from "./interval-session";
 import { localization, t } from "./localization";
+import { renderPaneAction } from "./pane-action";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
 import type { IntervalReview, ReviewGrade } from "./study-state";
@@ -41,10 +42,13 @@ export class IntervalView {
     this.opening = undefined;
   }
 
-  renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
+  renderCatalog(root: HTMLElement, sectionId: string) {
     const now = new Date();
-    const block = root.createDiv({ cls: "study-cards-practice-row" });
-    const start = block.createEl("button", { text: t("spacedRepetition"), attr: { "data-focus": "interval-start" } });
+    const section = this.study.intervalStatistics(sectionId, now);
+    const detail = section.available ? t("availableNow", { count: section.available }) : section.nextDue
+      ? t("nextReview", { date: localization.date(section.nextDue) }) : t("noCardsToReview");
+    const start = root.createEl("button", { attr: { "data-focus": "interval-start" } });
+    renderPaneAction(start, "rotate-cw", t("spacedRepetition"), detail);
     start.disabled = this.blocked();
     start.onclick = () => this.perform(async () => {
       const opening = IntervalSession.start(this.study, sectionId);
@@ -57,15 +61,7 @@ export class IntervalView {
       }
     }, ".study-cards-interval-question");
 
-    const section = this.study.intervalStatistics(sectionId, now);
-    this.renderStatistics(block, section);
-    if (!section.available) block.createEl("p", { text: section.nextDue
-      ? t("nextReview", { date: localization.date(section.nextDue) }) : t("noCardsToReview") });
     const all = this.study.intervalStatistics(null, now);
-    const totals = block.createEl("details", { attr: { "data-card": "interval-statistics" } });
-    totals.open = opened.has("interval-statistics");
-    totals.createEl("summary", { text: t("allSectionReviews") });
-    this.renderStatistics(totals, all);
     this.updateAt(all.dayEndsAt, all.nextDue);
   }
 
@@ -118,6 +114,9 @@ export class IntervalView {
       this.focus('[data-focus="interval-start"]');
     };
     this.renderStatistics(panel, { ...stats, available });
+    const totals = panel.createEl("details", { cls: "study-cards-interval-totals" });
+    totals.createEl("summary", { text: t("allSectionReviews") });
+    this.renderStatistics(totals, this.study.intervalStatistics(null, new Date()));
 
     const body = panel.createDiv({ cls: "study-cards-interval-body" });
     const heading = nextDue ? t("waitingForReview") : t("noCardsToReview");

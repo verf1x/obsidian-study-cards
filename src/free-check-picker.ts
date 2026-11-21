@@ -15,7 +15,7 @@ export class CardPicker {
   private readonly list: HTMLElement;
   private selectedOnly = false;
 
-  constructor(root: HTMLElement, actions: { summary: HTMLElement; secondary: HTMLElement },
+  constructor(root: HTMLElement, actions: { summary: HTMLElement; buttons: HTMLElement },
     start: CheckCard | undefined, private readonly onChange: () => void) {
     if (start) this.selected.set(start.id, start);
     this.root = root.createEl("fieldset", { cls: "study-cards-picker", attr: { "aria-label": t("selectCheckCards") } });
@@ -31,7 +31,8 @@ export class CardPicker {
     this.allButton.onclick = () => this.filter(false);
     this.selectedButton.onclick = () => this.filter(true);
     this.count = actions.summary.createDiv({ cls: "study-cards-picker-count", attr: { role: "status" } });
-    this.clearButton = actions.secondary.createEl("button", { text: t("clearCheckSelection"), attr: { type: "button" } });
+    this.clearButton = actions.buttons.createEl("button", { text: t("clearCheckSelection"), cls: "study-cards-quiet-button",
+      attr: { type: "button" } });
     this.clearButton.onclick = () => {
       this.selected.clear();
       this.filterButton.focus();
@@ -115,7 +116,8 @@ export class CardPicker {
       row.addClass("study-cards-picker-note-option");
       const checked = note.filter(({ id }) => this.selected.has(id)).length;
       const count = t("questionSelectionCount", { selected: checked, total: note.length });
-      text.createSpan({ cls: "study-cards-picker-detail", text: count });
+      row.createSpan({ cls: "study-cards-picker-detail study-cards-picker-note-count", text: t("pickerNoteCount", { selected: checked, total: note.length }),
+        attr: { "aria-hidden": "true" } });
       input.setAttribute("aria-label", t("selectNoteCards", { path, count: note.length }) + ". " + count);
       input.checked = checked === note.length;
       input.indeterminate = checked > 0 && !input.checked;
