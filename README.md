@@ -12,7 +12,7 @@ Create a study section and add Markdown files or folders. The preview shows whic
 
 ## Platform compatibility
 
-The [0.1.2 draft acceptance report](docs/acceptance/0.1.2.md) records local checks with Obsidian 1.15.1 on Windows 11, Arch Linux under WSL2 and Android 17 on a Pixel 8 Pro. Obsidian Sync acceptance is pending. The manifest currently declares Obsidian 1.8.7 as the provisional minimum. Study Cards can also be installed on macOS and iOS. Compatibility on those platforms is unverified.
+The [0.1.2 draft acceptance report](docs/acceptance/0.1.2.md) records local checks with Obsidian 1.15.1 on Windows 11, Arch Linux under WSL2 and Android 17 on a Pixel 8 Pro. The manifest currently declares Obsidian 1.8.7 as the provisional minimum. Study Cards can also be installed on macOS and iOS. Compatibility on those platforms is unverified.
 
 ## Test vault
 
