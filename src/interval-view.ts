@@ -3,14 +3,14 @@ import { reviewDue } from "./interval-queue";
 import { IntervalSession, type ReviewQuestion } from "./interval-session";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
-import type { ReviewGrade } from "./study-state";
+import type { IntervalReview, ReviewGrade } from "./study-state";
 
-const grades: ReadonlyArray<[ReviewGrade, string, string]> = [
-  ["again", "Снова", "Ответ забыт"],
-  ["hard", "Трудно", "Верный ответ с усилием"],
-  ["good", "Хорошо", "Обычный верный ответ"],
-  ["easy", "Легко", "Уверенный ответ без усилия"],
-];
+const grades: Record<ReviewGrade, { label: string; description: string }> = {
+  again: { label: "Снова", description: "Ответ забыт" },
+  hard: { label: "Трудно", description: "Верный ответ с усилием" },
+  good: { label: "Хорошо", description: "Обычный верный ответ" },
+  easy: { label: "Легко", description: "Уверенный ответ без усилия" },
+};
 
 function formatInterval(ms: number) {
   const minutes = Math.max(1, Math.round(ms / 60_000));
@@ -87,6 +87,14 @@ export class IntervalView {
       this.study.setSuspended({ id: globalThis.crypto.randomUUID(), revision }, card, !suspended));
     const due = reviewDue(card);
     if (due) root.createSpan({ text: "Срок повторения · " + due.toLocaleString() });
+  }
+
+  renderCardReviews(root: HTMLElement, reviews: readonly IntervalReview[]) {
+    const list = root.createEl("ul", { attr: { "aria-label": "Интервальные оценки" } });
+    for (const { grade, at } of [...reviews].reverse()) {
+      const row = list.createEl("li", { text: grades[grade].label + " · " });
+      row.createEl("time", { text: new Date(at).toLocaleString(), attr: { datetime: at } });
+    }
   }
 
   renderScreen(root: HTMLElement) {
@@ -184,7 +192,8 @@ export class IntervalView {
   private renderGrades(root: HTMLElement, session: IntervalSession, question: ReviewQuestion) {
     const intervals = session.intervals(question);
     const row = root.createDiv({ cls: "study-cards-interval-grades" });
-    for (const [grade, label, description] of grades) {
+    for (const grade of Object.keys(grades) as ReviewGrade[]) {
+      const { label, description } = grades[grade];
       const button = row.createEl("button", { cls: grade === "good" ? "mod-cta" : undefined,
         attr: { title: description, "data-interval-grade": grade } });
       button.createSpan({ text: label });
