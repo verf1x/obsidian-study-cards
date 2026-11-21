@@ -1,6 +1,7 @@
-import type { CardProgress, FreeSession, IntervalReview, KnownNote, ReviewSchedule, Section, Source, SourceRequest, StudyData } from "./study-state";
+import type { CardProgress, FreeGrade, FreeSession, IntervalReview, KnownNote, ReviewSchedule, Section, Source, SourceRequest, StudyData } from "./study-state";
 import { StaleStudyState, StudyStorage, type ImportPreview, type StudyMutation } from "./study-storage";
 import { MarkdownNote, sameFormat, single, type Format, type MarkdownCard, type Status } from "./markdown";
+import { canAdvance, checkRange, checkScore, isCheckCard, sampleCards, type CheckSelection } from "./free-check";
 
 export interface StudyVault {
   markdownFiles(): string[];
@@ -153,6 +154,11 @@ export class StudyCards {
   get progress() {
     const { revision, data: { progress, freeSession, freeResults } } = this.catalog;
     return structuredClone({ revision, progress, freeSession, freeResults });
+  }
+
+  get freeChecks() {
+    const { revision, data: { freeSession, freeResults } } = this.catalog;
+    return structuredClone({ revision, session: freeSession, results: freeResults });
   }
 
   subscribe(listener: () => void) {
@@ -463,7 +469,10 @@ export class StudyCards {
   }
 
   cards(sectionId: string, order?: "source") {
-    const { data, index } = this.catalog;
+    return this.sectionCards(sectionId, order, this.catalog.data, this.catalog.index);
+  }
+
+  private sectionCards(sectionId: string, order?: "source", data = this.data, index = this.index) {
     const cards = this.allCards(data, index).filter((card) => index.get(card.path)?.sections.includes(sectionId));
     if (order !== "source") return cards;
     const sources = this.section(sectionId, data).sources;
@@ -580,9 +589,65 @@ export class StudyCards {
   freeCheckQuestions() {
     const session = this.catalog.data.freeSession;
     if (!session) return [];
-    const cards = new Map(this.cards(session.sectionId).filter(({ identity }) => identity === "valid")
+    const cards = new Map(this.cards(session.sectionId).filter(isCheckCard)
       .map((card) => [card.id, card]));
     return session.cardIds.map((id) => ({ id, card: cards.get(id) ?? null, grade: session.grades[id] ?? null }));
+  }
+
+  startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
+    return this.run("Начало свободной проверки", async () => {
+      if ((this.data.freeSession?.id ?? null) !== previousId) throw new StaleStudyState();
+      const result = "retryOf" in selection ? this.data.freeResults.find(({ id }) => id === selection.retryOf) : undefined;
+      if ("retryOf" in selection && !result) throw new StaleStudyState();
+      const sectionId = "sectionId" in selection ? selection.sectionId : result!.sectionId;
+      const cards = this.sectionCards(sectionId, "source").filter(isCheckCard);
+      let cardIds: string[];
+      if ("order" in selection) {
+        const { offset, maximum } = checkRange(cards, selection.order, selection.start);
+        if (!Number.isInteger(selection.count) || selection.count < 1 || selection.count > maximum) {
+          throw new Error("Изменилось количество доступных вопросов. Проверьте настройки проверки.");
+        }
+        cardIds = sampleCards(cards, selection.order, selection.count, offset).map(({ id }) => id);
+      } else {
+        const available = new Set(cards.map(({ id }) => id));
+        cardIds = checkScore(result!, available).mistakes;
+        if (!cardIds.some((id) => available.has(id))) throw new Error("Все вопросы с ошибками недоступны.");
+      }
+      this.data.freeSession = {
+        id: mutation.id, sectionId, startedAt, retryOf: result?.id ?? null, cardIds, position: 0, furthestPosition: 0, grades: {},
+      };
+    }, { mutation });
+  }
+
+  private freeSession(sessionId: string) {
+    const session = this.data.freeSession;
+    if (!session || session.id !== sessionId) throw new StaleStudyState();
+    return session;
+  }
+
+  moveFreeCheck(mutation: ProgressMutation, sessionId: string, direction: -1 | 1) {
+    return this.run("Переход к вопросу свободной проверки", async () => {
+      const session = this.freeSession(sessionId);
+      const position = session.position + direction;
+      if (position < 0 || position >= session.cardIds.length) throw new StaleStudyState();
+      if (direction === 1) {
+        const id = session.cardIds[session.position];
+        const available = this.sectionCards(session.sectionId).some((card) => card.id === id && isCheckCard(card));
+        if (!canAdvance(session, available)) throw new Error("Оцените текущий ответ, чтобы перейти дальше.");
+      }
+      session.furthestPosition = Math.max(session.furthestPosition ?? session.position, position);
+      session.position = position;
+    }, { mutation });
+  }
+
+  gradeFreeCheck(mutation: ProgressMutation, sessionId: string, selected: Card, grade: FreeGrade) {
+    return this.run("Оценка ответа свободной проверки", async () => {
+      const session = this.freeSession(sessionId);
+      if (selected.id !== session.cardIds[session.position]
+        || !this.index.get(selected.path)?.sections.includes(session.sectionId)) throw new StaleStudyState();
+      const id = await this.verifyCard(selected);
+      session.grades[id] = grade;
+    }, { mutation });
   }
 
   saveFreeCheck(mutation: ProgressMutation, session: FreeSession) {
@@ -598,23 +663,25 @@ export class StudyCards {
         if (!card) throw new Error("Вопрос пока недоступен.");
         await this.verifyCard(card);
       }
-      this.data.freeSession = structuredClone({ ...session, grades: { ...previous?.grades, ...session.grades } });
+      const furthestPosition = Math.max(session.furthestPosition ?? session.position, previous?.furthestPosition ?? previous?.position ?? 0);
+      this.data.freeSession = structuredClone({ ...session, furthestPosition, grades: { ...previous?.grades, ...session.grades } });
     }, { mutation });
   }
 
   finishFreeCheck(mutation: ProgressMutation, sessionId: string, finishedAt: string) {
     return this.run("Завершение свободной проверки", async () => {
-      const session = this.data.freeSession;
-      if (!session || session.id !== sessionId) throw new StaleStudyState();
-      const { position: _position, ...result } = session;
-      if (Object.keys(result.grades).length) this.data.freeResults.push({ ...result, finishedAt });
+      const session = this.freeSession(sessionId);
+      const { position: _position, furthestPosition: _furthest, ...result } = session;
+      const available = new Set(this.sectionCards(session.sectionId).filter(isCheckCard).map(({ id }) => id));
+      const { graded, unavailable } = checkScore(session, available);
+      if (graded) this.data.freeResults.push({ ...result, finishedAt, ungradedUnavailable: unavailable });
       this.data.freeSession = null;
     }, { mutation });
   }
 
   discardFreeCheck(mutation: ProgressMutation, sessionId: string) {
     return this.run("Отказ от свободной проверки", async () => {
-      if (this.data.freeSession?.id !== sessionId) throw new StaleStudyState();
+      this.freeSession(sessionId);
       this.data.freeSession = null;
     }, { mutation });
   }
