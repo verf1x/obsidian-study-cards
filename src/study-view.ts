@@ -5,12 +5,18 @@ import type { Card, StudyCards } from "./study-cards";
 
 export const viewType = "study-cards";
 
+export interface CatalogActions {
+  createSection(): void;
+  addSources(): void;
+  createCard(): void;
+}
+
 export class StudyView extends ItemView {
   private unsubscribe?: () => void;
   private answers = new Component();
 
-  constructor(leaf: WorkspaceLeaf, private readonly study: StudyCards, private readonly watch: WatchVault,
-    private readonly openNote: (path: string) => Promise<void>) {
+  constructor(leaf: WorkspaceLeaf, protected readonly study: StudyCards, private readonly watch: WatchVault,
+    protected readonly openNote: (path: string) => Promise<void>) {
     super(leaf);
   }
 
@@ -28,34 +34,39 @@ export class StudyView extends ItemView {
     this.removeChild(this.answers);
   }
 
-  private render() {
+  protected render() {
     const root = this.contentEl;
     const opened = new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card")));
-    this.removeChild(this.answers);
-    this.answers = this.addChild(new Component());
+    this.resetAnswers();
     root.empty();
     root.addClass("study-cards-view");
+    if (this.renderAlternateScreen(root)) return;
 
     const toolbar = root.createDiv({ cls: "study-cards-controls" });
+    const createSection = () => new SectionModal(this.app, this.study).open();
     const sectionId = this.study.activeSection;
     const section = this.study.sections.find(({ id }) => id === sectionId);
     if (this.study.sections.length) {
-      const select = toolbar.createEl("label", { text: "Учебный раздел " }).createEl("select");
+      const label = toolbar.createEl("label", { text: "Раздел " });
+      const select = label.createEl("select", { attr: { "aria-label": "Учебный раздел", "data-focus": "section" } });
       for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
       select.value = section?.id ?? "";
       select.onchange = () => this.perform(this.study.openSection(select.value));
     }
-    toolbar.createEl("button", { text: "Новый раздел" }).onclick = () => new SectionModal(this.app, this.study).open();
     if (!section) {
+      toolbar.createEl("button", { text: "Новый раздел" }).onclick = createSection;
       root.createEl("p", { text: "Создайте учебный раздел, чтобы добавить заметки или папки." });
       return;
     }
-    toolbar.createEl("button", { text: "Добавить источники" }).onclick =
-      () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open();
-    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta" }).onclick =
-      () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open();
+    this.renderSectionActions(root, section.id, section.name, opened);
 
-    const sources = root.createEl("details", { attr: { "data-card": "sources" } });
+    const sourceRow = root.createDiv();
+    const sources = sourceRow.createEl("details", { attr: { "data-card": "sources" } });
+    this.renderCatalogActions(toolbar, sourceRow, {
+      createSection,
+      addSources: () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open(),
+      createCard: () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open(),
+    });
     sources.open = opened.has("sources");
     sources.createEl("summary", { text: "Источники · " + section.sources.length });
     for (const source of section.sources) {
@@ -67,26 +78,68 @@ export class StudyView extends ItemView {
       }
       row.createEl("button", { text: "Отключить" }).onclick = () => this.perform(this.study.removeSource(section.id, source.id));
     }
-    const cards = this.study.cards(section.id);
-    root.createEl("h3", { text: "Карточки · " + cards.length });
-    for (const { path, message } of this.study.errors(section.id)) {
+    this.renderCatalog(root, section.id, opened);
+  }
+
+  protected renderAlternateScreen(_root: HTMLElement): boolean { return false; }
+
+  protected renderSectionActions(_root: HTMLElement, _sectionId: string, _name: string, _opened: Set<string | null>) {}
+
+  protected renderCatalogActions(toolbar: HTMLElement, _sourceRow: HTMLElement, actions: CatalogActions) {
+    toolbar.createEl("button", { text: "Новый раздел" }).onclick = actions.createSection;
+    toolbar.createEl("button", { text: "Добавить источники" }).onclick = actions.addSources;
+    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta" }).onclick = actions.createCard;
+  }
+
+  protected resetAnswers() {
+    this.removeChild(this.answers);
+    this.answers = this.addChild(new Component());
+  }
+
+  protected renderErrors(root: HTMLElement, sectionId: string) {
+    for (const { path, message } of this.study.errors(sectionId)) {
       const error = root.createDiv({ cls: "study-cards-item" });
       error.createEl("p", { text: path + " · " + message });
       error.createEl("button", { text: "Открыть заметку" }).onclick = () => this.perform(this.openNote(path));
       error.createEl("button", { text: "Предпросмотр подключения" }).onclick = () =>
-        new SelectSourcesModal(this.app, this.study, this.watch, section.id, [{ kind: "file", path }]).open();
+        new SelectSourcesModal(this.app, this.study, this.watch, sectionId, [{ kind: "file", path }]).open();
     }
+  }
+
+  protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
+    const cards = this.study.cards(sectionId);
+    root.createEl("h3", { text: "Карточки · " + cards.length });
+    this.renderErrors(root, sectionId);
     for (const card of cards) {
-      const key = card.path + ":" + (card.id ?? "") + ":" + card.index;
+      const key = this.cardKey(card);
       this.renderCard(root, card, key, opened.has(key));
     }
   }
 
-  private renderCard(root: HTMLElement, card: Card, key: string, open: boolean) {
+  protected cardKey(card: Card) { return card.path + ":" + (card.id ?? "") + ":" + card.index; }
+
+  protected renderCard(root: HTMLElement, card: Card, key: string, open: boolean, summaryContent?: (summary: HTMLElement) => void) {
     const details = root.createEl("details", { cls: "study-cards-item", attr: { "data-card": key } });
     details.open = open;
-    details.createEl("summary", { text: card.question });
-    const actions = details.createDiv({ cls: "study-cards-controls" });
+    const summary = details.createEl("summary");
+    if (summaryContent) summaryContent(summary);
+    else summary.textContent = card.question;
+    this.renderCardSummary(summary, card);
+    const body = details.createDiv({ cls: "study-cards-card-body" });
+    let rendered = false;
+    const renderAnswer = () => {
+      if (rendered || !details.open) return;
+      rendered = true;
+      this.renderCardBody(body, card);
+    };
+    details.ontoggle = renderAnswer;
+    renderAnswer();
+  }
+
+  protected renderCardSummary(_summary: HTMLElement, _card: Card) {}
+
+  protected renderCardBody(root: HTMLElement, card: Card, includeExtraActions = true) {
+    const actions = root.createDiv({ cls: "study-cards-controls study-cards-card-actions" });
     actions.createEl("button", { text: card.path, attr: { "aria-label": "Открыть заметку " + card.path } }).onclick =
       () => this.perform(this.openNote(card.path));
     const select = actions.createEl("label", { text: "Статус освоения " }).createEl("select");
@@ -108,25 +161,42 @@ export class StudyView extends ItemView {
       actions.createSpan({ text: card.identity === "missing" ? "UUID отсутствует" : "Некорректный UUID" });
       actions.createEl("button", { text: "Создать новый ID" }).onclick = () => this.perform(this.study.repairId(card));
     }
+    if (includeExtraActions) this.renderCardActions(actions, card);
 
-    const answer = details.createDiv();
-    let rendered = false;
-    const renderAnswer = () => {
-      if (rendered || !details.open) return;
-      rendered = true;
-      this.perform(MarkdownRenderer.render(this.app, card.answer, answer, card.path, this.answers));
-    };
-    details.ontoggle = renderAnswer;
-    renderAnswer();
+    void this.renderMarkdown(root.createDiv(), card);
     if (card.progress) {
-      const results = details.createEl("details");
+      const results = root.createEl("details");
       results.createEl("summary", { text: "Результаты и расписание" });
       if (card.progress.history !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.history, null, 2) });
       if (card.progress.schedule !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.schedule, null, 2) });
     }
   }
 
-  private perform(promise: Promise<unknown>) {
+  protected renderCardActions(_root: HTMLElement, _card: Card) {}
+
+  protected async renderMarkdown(root: HTMLElement, card: Card) {
+    root.addClass("markdown-rendered", "study-cards-markdown");
+    try {
+      await MarkdownRenderer.render(this.app, card.answer, root, card.path, this.answers);
+      const tables = [...root.querySelectorAll("table")];
+      for (const [index, table] of tables.entries()) {
+        const parent = table.parentElement;
+        const scroll = parent?.matches(".table-wrapper, .study-cards-table-scroll")
+          ? parent : root.ownerDocument.createElement("div");
+        if (scroll !== parent) {
+          table.before(scroll);
+          scroll.append(table);
+        }
+        scroll.addClass("study-cards-table-scroll");
+        const label = table.caption?.textContent?.trim() || (tables.length > 1 ? "Таблица " + (index + 1) : "Таблица");
+        scroll.setAttrs({ tabindex: "0", role: "region", "aria-label": label });
+      }
+    } catch (error) {
+      new Notice(message(error));
+    }
+  }
+
+  protected perform(promise: Promise<unknown>) {
     void promise.catch((error) => new Notice(message(error)));
   }
 }
@@ -136,6 +206,7 @@ class SectionModal extends Modal {
 
   onOpen() {
     this.setTitle("Новый учебный раздел");
+    this.contentEl.addClass("study-cards-form-modal");
     const form = this.contentEl.createEl("form", { cls: "study-cards-form" });
     const name = form.createEl("label", { text: "Название " }).createEl("input", { type: "text" });
     name.required = true;
@@ -158,6 +229,7 @@ class DuplicateModal extends Modal {
 
   onOpen() {
     this.setTitle("Конфликт UUID");
+    this.contentEl.addClass("study-cards-form-modal");
     const cards = this.study.duplicates(this.id);
     if (cards.length < 2) {
       this.contentEl.createEl("p", { text: "Конфликт уже решён." });
