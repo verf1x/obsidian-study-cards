@@ -1,12 +1,15 @@
 import { Notice, type App } from "obsidian";
-import { CheckPrompt, CheckSetupModal } from "./free-check-modals";
+import { CheckPrompt } from "./free-check-modals";
+import { FreeCheckSetup } from "./free-check-setup";
 import { canAdvance, checkScore, isCheckCard, type CheckCard, type CheckSelection } from "./free-check";
 import { localization, t } from "./localization";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
 import type { FreeGrade, FreeResult, FreeSession } from "./study-state";
 
-type Screen = { mode: "check"; id: string } | { mode: "result"; id: string; empty?: FreeResult };
+type Screen = { mode: "setup"; form: FreeCheckSetup }
+  | { mode: "check"; id: string }
+  | { mode: "result"; id: string; empty?: FreeResult };
 
 function checkName(check: FreeSession | FreeResult) {
   return check.retryOf === null ? t("freeCheck") : t("mistakeRetry");
@@ -21,21 +24,52 @@ export class FreeCheckView {
   private saving = false;
 
   constructor(private readonly app: App, private readonly study: StudyCards, private readonly root: HTMLElement,
-    private readonly render: () => void, private readonly renderMarkdown: (root: HTMLElement, card: Card) => Promise<void>) {}
+    private readonly render: () => void, private readonly renderMarkdown: (root: HTMLElement, card: Card) => Promise<void>,
+    private readonly backToPractice: () => void, private readonly onCheckStarted: (sectionId: string) => void) {}
 
-  renderCatalog(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
-    const { session, results } = this.study.freeChecks;
-    const actions = root.createDiv({ cls: "study-cards-controls study-cards-free-actions" });
-    if (session) actions.createEl("button", { text: t("continueFreeCheck"), cls: "mod-cta" }).onclick = () => this.showCheck(session.id);
-    const start = actions.createEl("button", { text: t("freeCheck"), cls: session ? undefined : "mod-cta" });
-    start.disabled = this.blocked() || !this.study.cards(sectionId).some(isCheckCard);
-    start.onclick = () => this.setup(sectionId, name);
+  close() { this.screen = undefined; }
 
+  renderPractice(root: HTMLElement, sectionId: string, name: string, introductory: boolean,
+    openNotes: () => void) {
+    const { session } = this.study.freeChecks;
+    const cards = this.study.cards(sectionId);
+    const actions = root.createDiv({ cls: "study-cards-practice-row" });
+    const buttons = actions.createDiv({ cls: "study-cards-controls" });
+    if (session) {
+      buttons.createEl("button", { text: t("continueFreeCheck"), cls: "mod-cta", attr: { "data-focus": "check-continue" } })
+        .onclick = () => this.showCheck(session.id);
+    }
+    const start = buttons.createEl("button", {
+      text: t(session ? "newFreeCheck" : "testYourself"), cls: session ? undefined : "mod-cta", attr: { "data-focus": "check-start" },
+    });
+    const eligible = cards.some(isCheckCard);
+    start.disabled = this.blocked() || !eligible;
+    start.onclick = () => this.setup(sectionId, name, { focus: "check-start", introductory });
+    if (!eligible) {
+      actions.createEl("p", { text: t(cards.length ? "sectionWithoutEligibleCards" : "sectionWithoutCards") });
+      actions.createEl("button", { text: t("notes") }).onclick = openNotes;
+    }
+  }
+
+  renderHistory(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
+    const { results } = this.study.freeChecks;
     const history = results.filter((result) => result.sectionId === sectionId).reverse();
-    if (!history.length) return;
+    const latest = history[0];
+    if (latest) {
+      const available = new Set(this.study.cards(sectionId).filter(isCheckCard).map(({ id }) => id));
+      const { mistakes } = checkScore(latest, available);
+      const actions = root.createDiv({ cls: "study-cards-controls study-cards-practice-row" });
+      if (mistakes.some((id) => available.has(id))) {
+        const retry = actions.createEl("button", { text: t("retryMistakes") });
+        retry.disabled = this.blocked();
+        retry.onclick = () => this.retry(latest);
+      }
+      actions.createEl("button", { text: t("latestCheckResult") }).onclick = () => this.showResult(latest.id);
+    }
     const details = root.createEl("details", { cls: "study-cards-item", attr: { "data-card": "check-history" } });
     details.open = opened.has("check-history");
     details.createEl("summary", { text: t("checkHistoryCount", { count: history.length }) });
+    if (!latest) details.createEl("p", { text: t("noCheckResults") });
     for (const result of history) {
       const { correct, graded } = checkScore(result, new Set());
       const date = localization.date(result.finishedAt);
@@ -47,13 +81,26 @@ export class FreeCheckView {
 
   renderCardAction(root: HTMLElement, card: Card, sectionId: string, name: string) {
     if (!isCheckCard(card)) return;
-    const start = root.createEl("button", { text: t("startFromCard") });
+    const focus = `check-start:${card.id}`;
+    const start = root.createEl("button", { text: t("startFromCard"), attr: { "data-focus": focus } });
     start.disabled = this.blocked();
-    start.onclick = () => this.setup(sectionId, name, card);
+    start.onclick = () => this.setup(sectionId, name, { focus, start: card });
+  }
+
+  refreshSetup() {
+    const screen = this.screen;
+    if (screen?.mode !== "setup" || !this.root.contains(screen.form.root)) return false;
+    const { problem, saving } = this.study.persistence;
+    screen.form.refresh(Boolean(problem), saving);
+    return true;
   }
 
   renderScreen(root: HTMLElement) {
     if (!this.screen) return false;
+    if (this.screen.mode === "setup") {
+      root.append(this.screen.form.root);
+      return this.refreshSetup();
+    }
     const { revision, session, results } = this.study.freeChecks;
     const { id } = this.screen;
     if (this.screen.mode === "check" && session?.id === id) {
@@ -96,22 +143,30 @@ export class FreeCheckView {
     this.focus(".study-cards-free-title");
   }
 
-  private catalog() {
+  private practice() {
     this.screen = this.answer = undefined;
-    this.render();
-    this.focus(".study-cards-free-actions button:not(:disabled)");
+    this.backToPractice();
   }
 
   private sectionName(sectionId: string) {
     return this.study.sections.find(({ id }) => id === sectionId)?.name ?? t("sectionUnavailable");
   }
 
-  private setup(sectionId: string, name: string, start?: CheckCard) {
+  private setup(sectionId: string, name: string,
+    { focus, start, introductory = false }: { focus: string; start?: CheckCard; introductory?: boolean }) {
     this.replaceCheck((previousId) => {
-      new CheckSetupModal(this.app, { id: sectionId, name }, start,
-        () => this.study.sections.some(({ id }) => id === sectionId) ? this.study.cards(sectionId, "source").filter(isCheckCard) : [],
-        (update) => this.study.subscribe(update),
-        (selection) => this.start(previousId, selection)).open();
+      const container = this.root.ownerDocument.createElement("div");
+      const form = new FreeCheckSetup(container, { id: sectionId, name }, start, introductory,
+        () => this.study.cards(sectionId, "source").filter(isCheckCard),
+        () => {
+          this.screen = undefined;
+          this.render();
+          this.focus(`[data-focus="${CSS.escape(focus)}"]`);
+        },
+        (selection) => this.start(previousId, selection));
+      this.screen = { mode: "setup", form };
+      this.render();
+      form.focus();
     });
   }
 
@@ -134,11 +189,21 @@ export class FreeCheckView {
     this.saving = true;
     try {
       await this.study.startFreeCheck({ id, revision }, previousId, selection, new Date().toISOString());
-    } finally {
+    } catch (error) {
       this.saving = false;
       this.render();
+      throw error;
     }
+    this.saving = false;
+    if ("sectionId" in selection) this.onCheckStarted(selection.sectionId);
     this.showCheck(id);
+  }
+
+  private retry(result: FreeResult) {
+    if (this.blocked()) return;
+    this.replaceCheck((previous) => {
+      void this.start(previous, { retryOf: result.id }).catch((error) => new Notice(message(error)));
+    });
   }
 
   private renderCheck(root: HTMLElement, session: FreeSession, revision: string | null) {
@@ -156,9 +221,9 @@ export class FreeCheckView {
     const panel = root.createDiv({ cls: "study-cards-free-panel", attr: { "aria-label": checkName(session) } });
     const header = panel.createDiv({ cls: "study-cards-controls study-cards-free-header" });
     header.createEl("strong", { text: t("checkSectionHeading", { check: checkName(session), section: this.sectionName(session.sectionId) }) });
-    header.createEl("button", { text: t("backToCatalog") }).onclick = () => this.catalog();
+    header.createEl("button", { text: t("backToPractice") }).onclick = () => this.practice();
     const graded = Object.keys(session.grades).length;
-    panel.createEl("p", { text: t("checkQuestionProgress", { position: session.position + 1, total: session.cardIds.length, graded }) });
+    panel.createEl("p", { cls: "study-cards-free-progress", text: t("checkQuestionProgress", { position: session.position + 1, total: session.cardIds.length, graded }) });
     const body = panel.createDiv({ cls: "study-cards-free-body" });
     body.createEl("h2", { cls: "study-cards-free-question", text: card?.question ?? t("cardUnavailable"),
       attr: { tabindex: "-1" } });
@@ -260,13 +325,11 @@ export class FreeCheckView {
     if (mistakes.length) {
       const canRetry = mistakes.some((id) => cards.has(id));
       if (!canRetry) report.createEl("p", { text: t("allMistakesUnavailable") });
-      const retry = actions.createEl("button", { text: t("mistakeRetry"), cls: "mod-cta" });
+      const retry = actions.createEl("button", { text: t("retryMistakes"), cls: "mod-cta" });
       retry.disabled = this.blocked() || !canRetry;
-      retry.onclick = () => this.replaceCheck((previous) => {
-        void this.start(previous, { retryOf: result.id }).catch((error) => new Notice(message(error)));
-      });
+      retry.onclick = () => this.retry(result);
     }
-    actions.createEl("button", { text: t("backToCatalog") }).onclick = () => this.catalog();
+    actions.createEl("button", { text: t("backToPractice") }).onclick = () => this.practice();
   }
 
   private perform(action: () => Promise<void>, after: () => void) {

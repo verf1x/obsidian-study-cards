@@ -3,7 +3,7 @@ import { setInterfaceLanguage, t } from "./localization";
 import { obsidianStudyStorage } from "./obsidian-study-storage";
 import { sharedStudyPath, StudyStorage } from "./study-storage";
 import { studyVault } from "./obsidian-vault";
-import { message, SelectSourcesModal, sourceRequest, type VaultChange, type WatchVault } from "./source-modals";
+import { message, sourceRequest, type VaultChange, type WatchVault } from "./source-modals";
 import { StudyCards, type SourceRequest } from "./study-cards";
 import { StudyView, viewType } from "./study-view";
 
@@ -91,16 +91,12 @@ export default class StudyCardsPlugin extends Plugin {
       await leaf.setViewState({ type: viewType, active: true });
     }
     await this.app.workspace.revealLeaf(leaf);
+    return leaf;
   }
 
   private async addSources(requests: SourceRequest[]) {
-    await this.showView();
-    const section = this.study.activeSection;
-    if (!section) {
-      new Notice(t("chooseSectionForSources"));
-      return;
-    }
-    new SelectSourcesModal(this.app, this.study, this.watch, section, requests).open();
+    const { view } = await this.showView();
+    if (view instanceof StudyView) view.connectNotes(requests);
   }
 
   private openNote = async (path: string) => {

@@ -43,7 +43,7 @@ export class IntervalView {
 
   renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
     const now = new Date();
-    const block = root.createDiv({ cls: "study-cards-free-actions" });
+    const block = root.createDiv({ cls: "study-cards-practice-row" });
     const start = block.createEl("button", { text: t("spacedRepetition"), attr: { "data-focus": "interval-start" } });
     start.disabled = this.blocked();
     start.onclick = () => this.perform(async () => {
@@ -59,6 +59,8 @@ export class IntervalView {
 
     const section = this.study.intervalStatistics(sectionId, now);
     this.renderStatistics(block, section);
+    if (!section.available) block.createEl("p", { text: section.nextDue
+      ? t("nextReview", { date: localization.date(section.nextDue) }) : t("noCardsToReview") });
     const all = this.study.intervalStatistics(null, now);
     const totals = block.createEl("details", { attr: { "data-card": "interval-statistics" } });
     totals.open = opened.has("interval-statistics");
@@ -108,7 +110,7 @@ export class IntervalView {
     const panel = root.createDiv({ cls: "study-cards-interval-panel", attr: { "aria-label": t("spacedRepetition") } });
     const header = panel.createDiv({ cls: "study-cards-controls study-cards-interval-header" });
     header.createEl("strong", { text: t("spacedRepetitionSection", { section: section.name }) });
-    const back = header.createEl("button", { text: t("backToCatalog") });
+    const back = header.createEl("button", { text: t("backToPractice") });
     back.disabled = this.busy;
     back.onclick = () => {
       this.close();

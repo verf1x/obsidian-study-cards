@@ -114,13 +114,6 @@
   padding-inline: 0.45rem;
 }
 
-.study-cards-source-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.5rem;
-}
-
 .study-cards-search-status:not(:empty) {
   margin-block: 0.25rem 0.5rem;
   font-size: var(--font-ui-small);

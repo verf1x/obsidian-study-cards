@@ -70,16 +70,18 @@ export class SelectSourcesModal extends Modal {
   private readonly requests: SourceRequest[];
   private previousPreview?: EnrollmentPreview;
   private unsubscribe?: () => void;
+  private sectionName?: string;
 
   constructor(app: App, private readonly study: StudyCards, private readonly watch: WatchVault,
-    private readonly section: string, initial: SourceRequest[], private readonly lockSelection = false,
+    private readonly section: string | { onConnected: () => void }, initial: SourceRequest[], private readonly lockSelection = false,
     private readonly replacement?: Source) {
     super(app);
     this.requests = initial.map((request) => ({ ...request }));
   }
 
   onOpen() {
-    this.setTitle(this.replacement ? t("reconnectSource") : this.lockSelection ? t("configureSource") : t("addSources"));
+    this.setTitle(typeof this.section !== "string" ? t("connectNotes")
+      : this.replacement ? t("reconnectSource") : this.lockSelection ? t("configureSource") : t("addSources"));
     this.contentEl.addClass("study-cards-source-modal");
     this.unsubscribe = this.watch(({ path, oldPath }) => {
       if (!oldPath) return;
@@ -93,14 +95,14 @@ export class SelectSourcesModal extends Modal {
       }
       if (changed) this.render();
     });
-    this.render();
+    this.render(this.requests.length ? "preview" : "pick");
   }
 
   onClose() {
     this.unsubscribe?.();
   }
 
-  private render() {
+  private render(focus?: "pick" | "preview") {
     this.contentEl.empty();
     for (const [index, source] of this.requests.entries()) {
       const item = this.contentEl.createDiv({ cls: "study-cards-item" });
@@ -110,7 +112,7 @@ export class SelectSourcesModal extends Modal {
         const remove = headline.createEl("button", { text: t("remove"), attr: { "aria-label": t("removeNamedSource", { path: pathName(source.path) }) } });
         remove.onclick = () => {
           this.requests.splice(index, 1);
-          this.render();
+          this.render("pick");
         };
       }
       if (source.kind === "folder") {
@@ -130,26 +132,47 @@ export class SelectSourcesModal extends Modal {
       pick.onclick = () => picker(this.app, this.replacement?.kind, (source) => {
         if (this.replacement) this.requests.splice(0, 1, { ...this.replacement, ...source });
         else if (!this.requests.some(({ path, kind }) => path === source.path && kind === source.kind)) this.requests.push(source);
-        this.render();
+        this.render(this.replacement ? "preview" : "pick");
       });
+      if (focus === "pick") pick.focus();
+    }
+    if (typeof this.section !== "string") {
+      actions.createEl("button", { text: t("cancel") }).onclick = () => this.close();
     }
     if (!this.requests.length) return;
     const next = actions.createEl("button", { text: t("preview"), cls: "mod-cta" });
     next.onclick = () => {
       try {
-        const preview = this.previousPreview ?? this.study.preview(this.section, this.requests, this.replacement?.id);
+        const target = this.section;
+        const preview = this.previousPreview ?? (typeof target === "string"
+          ? this.study.preview(target, this.requests, this.replacement?.id)
+          : this.study.previewFirstSection(this.requests));
         if (this.previousPreview) preview.replaceSources(this.requests);
-        const modal = new PreviewModal(this.app, this.watch, preview, this.lockSelection ? t("save") : t("connect"), () => {
+        const first = typeof target !== "string" ? {
+          name: this.sectionName ?? this.suggestSectionName(),
+          onNameChange: (name: string) => { this.sectionName = name; },
+          onConnected: target.onConnected,
+        } : undefined;
+        const confirm = first ? t("connectAndCreateSection") : this.lockSelection ? t("save") : t("connect");
+        const modal = new PreviewModal(this.app, this.watch, preview, confirm, () => {
           this.previousPreview = preview;
           this.requests.splice(0, this.requests.length, ...preview.sources.map((source) => ({ ...source })));
           this.open();
-        });
+        }, first);
         this.close();
         modal.open();
       } catch (error) {
         new Notice(message(error));
       }
     };
+    if (focus === "preview") next.focus();
+  }
+
+  private suggestSectionName() {
+    if (this.requests.length !== 1) return t("suggestedSectionName");
+    const { path, kind } = this.requests[0]!;
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    return (kind === "file" ? name.replace(/\.md$/i, "") : name) || t("suggestedSectionName");
   }
 }
 
@@ -159,13 +182,19 @@ class PreviewModal extends Modal {
   private feedback!: HTMLElement;
   private confirm!: HTMLButtonElement;
   private backButton!: HTMLButtonElement;
+  private name?: HTMLInputElement;
+  private total?: HTMLElement;
+  private rows?: PreviewRow[];
+  private eligible = false;
   private pending = new Set<string>();
+  private sourceChanged = false;
   private refreshAll = true;
   private busy = false;
   private openNow = false;
 
   constructor(app: App, private readonly watch: WatchVault, private readonly preview: EnrollmentPreview,
-    private readonly confirmLabel: string, private readonly goBack: () => void) {
+    private readonly confirmLabel: string, private readonly goBack: () => void,
+    private readonly first?: { name: string; onNameChange: (name: string) => void; onConnected: () => void }) {
     super(app);
   }
 
@@ -173,8 +202,22 @@ class PreviewModal extends Modal {
     this.openNow = true;
     this.setTitle(t("enrollmentPreview"));
     this.contentEl.addClass("study-cards-source-modal");
+    if (this.first) {
+      const label = this.contentEl.createEl("label", { cls: "study-cards-form", text: t("studySection") });
+      this.name = label.createEl("input", { type: "text", value: this.first.name });
+      this.name.required = true;
+      this.name.oninput = () => {
+        this.first?.onNameChange(this.name!.value);
+        this.updateConfirm();
+      };
+      this.name.focus();
+      this.total = this.contentEl.createEl("p", { attr: { "aria-live": "polite" } });
+    }
     this.contentEl.createEl("p", { text: t("enrollmentNotice") });
-    this.list = this.contentEl.createDiv({ cls: "study-cards-source-review" });
+    this.list = this.contentEl.createDiv({
+      cls: "study-cards-source-review",
+      attr: { tabindex: "0", role: "region", "aria-label": t("enrollmentPreview") },
+    });
     this.feedback = this.contentEl.createEl("p", { attr: { role: "status" } });
     const actions = this.contentEl.createDiv({ cls: "study-cards-dialog-actions" });
     this.backButton = actions.createEl("button", { text: t("back") });
@@ -182,6 +225,7 @@ class PreviewModal extends Modal {
       this.close();
       this.goBack();
     };
+    if (this.first) actions.createEl("button", { text: t("cancel") }).onclick = () => { if (!this.busy) this.close(); };
     this.confirm = actions.createEl("button", { text: this.confirmLabel, cls: "mod-cta" });
     this.confirm.onclick = () => { void this.submit(); };
     this.unsubscribe = this.watch(({ path, oldPath }) => {
@@ -190,6 +234,7 @@ class PreviewModal extends Modal {
         this.pending.add(oldPath);
       }
       this.pending.add(path);
+      this.sourceChanged = true;
       void this.refresh();
     });
     void this.refresh();
@@ -205,28 +250,43 @@ class PreviewModal extends Modal {
     this.busy = true;
     this.confirm.disabled = this.backButton.disabled = true;
     const paths = this.refreshAll ? undefined : new Set(this.pending);
+    const sourceChanged = this.sourceChanged;
+    this.sourceChanged = false;
     this.pending.clear();
     this.refreshAll = false;
     try {
       const rows = await this.preview.refresh(paths);
-      if (this.openNow) this.render(rows);
+      if (this.openNow) {
+        if (this.first && sourceChanged && paths && this.rows) {
+          const previous = this.rows.filter(({ checked }) => checked);
+          const current = rows.filter(({ checked }) => checked);
+          if (JSON.stringify(previous) !== JSON.stringify(current)) {
+            this.feedback.textContent = t("confirmChangedSources", { paths: [...paths].join(", ") });
+          }
+        }
+        this.rows = rows;
+        this.render(rows);
+      }
     } catch (error) {
+      this.eligible = false;
       this.feedback.textContent = message(error);
     } finally {
       this.busy = false;
       this.backButton.disabled = false;
+      this.updateConfirm();
       if (this.refreshAll || this.pending.size) void this.refresh();
     }
   }
 
   private async submit() {
-    if (this.busy) return;
+    if (this.confirm.disabled) return;
     this.busy = this.confirm.disabled = true;
     this.backButton.disabled = true;
     try {
-      const result = await this.preview.confirm();
+      const result = await this.preview.confirm(this.name?.value);
       if (result.confirmed) {
         this.close();
+        this.first?.onConnected();
         return;
       }
       this.feedback.textContent = t("confirmChangedSources", { paths: result.paths.join(", ") });
@@ -241,6 +301,10 @@ class PreviewModal extends Modal {
   }
 
   private render(rows: PreviewRow[]) {
+    if (this.total) {
+      const counts = new Map(rows.filter(({ checked }) => checked).map(({ path, cards }) => [path, cards.length]));
+      this.total.textContent = t("cardCount", { count: [...counts.values()].reduce((total, count) => total + count, 0) });
+    }
     const expanded = new Set([...this.list.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-row")));
     const focused = this.list.querySelector(":focus")?.getAttribute("data-focus");
     this.list.empty();
@@ -283,8 +347,12 @@ class PreviewModal extends Modal {
         });
       }
     }
-    this.confirm.disabled = rows.some((row) => row.checked && (row.dirty || row.error || row.needsFormat))
-      || (!this.preview.sources.some(({ kind }) => kind === "folder") && !rows.some(({ checked }) => checked));
+    this.eligible = !rows.some((row) => row.checked && (row.dirty || row.error || row.needsFormat))
+      && (this.preview.sources.some(({ kind }) => kind === "folder") || rows.some(({ checked }) => checked));
+  }
+
+  private updateConfirm() {
+    this.confirm.disabled = this.busy || !this.eligible || Boolean(this.name && !this.name.value.trim());
   }
 }
 

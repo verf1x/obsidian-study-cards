@@ -7,39 +7,55 @@ export class CardPicker {
   readonly root: HTMLFieldSetElement;
   private readonly selected = new Map<string, CardLabel>();
   private readonly search: HTMLInputElement;
-  private readonly selectedOnly: HTMLInputElement;
-  private readonly clear: HTMLButtonElement;
+  private readonly allButton: HTMLButtonElement;
+  private readonly selectedButton: HTMLButtonElement;
+  private readonly clearButton: HTMLButtonElement;
   private readonly count: HTMLElement;
   private readonly warning: HTMLElement;
   private readonly list: HTMLElement;
+  private selectedOnly = false;
 
-  constructor(root: HTMLElement, start: CheckCard | undefined, private readonly onChange: () => void) {
+  constructor(root: HTMLElement, actions: { summary: HTMLElement; secondary: HTMLElement },
+    start: CheckCard | undefined, private readonly onChange: () => void) {
     if (start) this.selected.set(start.id, start);
     this.root = root.createEl("fieldset", { cls: "study-cards-picker", attr: { "aria-label": t("selectCheckCards") } });
-    this.search = this.root.createEl("input", {
+    const tools = this.root.createDiv({ cls: "study-cards-picker-tools" });
+    this.search = tools.createEl("input", {
       type: "search", placeholder: t("searchCheckCards"), attr: { "aria-label": t("searchCheckCards") },
     });
     this.search.oninput = onChange;
     this.search.onkeydown = (event) => { if (event.key === "Enter") event.preventDefault(); };
-    const tools = this.root.createDiv({ cls: "study-cards-controls study-cards-picker-tools" });
-    const filter = tools.createEl("label", { cls: "study-cards-picker-filter" });
-    this.selectedOnly = filter.createEl("input", { type: "checkbox" });
-    filter.createSpan({ text: t("selectedCheckCardsOnly") });
-    this.selectedOnly.onchange = onChange;
-    this.clear = tools.createEl("button", { text: t("clearCheckSelection"), attr: { type: "button" } });
-    this.clear.onclick = () => {
+    const filter = tools.createDiv({ cls: "study-cards-segmented" });
+    this.allButton = filter.createEl("button", { text: t("allCheckCards"), attr: { type: "button" } });
+    this.selectedButton = filter.createEl("button", { text: t("selectedCheckCards"), attr: { type: "button" } });
+    this.allButton.onclick = () => this.filter(false);
+    this.selectedButton.onclick = () => this.filter(true);
+    this.count = actions.summary.createDiv({ cls: "study-cards-picker-count", attr: { role: "status" } });
+    this.clearButton = actions.secondary.createEl("button", { text: t("clearCheckSelection"), attr: { type: "button" } });
+    this.clearButton.onclick = () => {
       this.selected.clear();
-      this.selectedOnly.focus();
+      this.filterButton.focus();
       onChange();
     };
-    const status = this.root.createDiv();
-    this.count = status.createDiv({ attr: { role: "status" } });
-    this.warning = status.createDiv({ cls: "study-cards-picker-warning", attr: { role: "status" } });
+    this.warning = this.root.createDiv({ cls: "study-cards-picker-warning", attr: { role: "status" } });
     this.list = this.root.createDiv({ cls: "study-cards-picker-list", attr: { tabindex: "0", role: "region",
       "aria-label": t("selectCheckCards") } });
   }
 
   get cardIds() { return [...this.selected.keys()]; }
+
+  setVisible(visible: boolean) {
+    this.root.hidden = this.count.hidden = this.clearButton.hidden = !visible;
+  }
+
+  private get filterButton() { return this.selectedOnly ? this.selectedButton : this.allButton; }
+
+  private filter(selected: boolean) {
+    if (this.selectedOnly === selected) return;
+    this.selectedOnly = selected;
+    this.list.scrollTop = 0;
+    this.onChange();
+  }
 
   update(cards: readonly CheckCard[], saving: boolean) {
     const available = new Set<string>();
@@ -52,11 +68,12 @@ export class CardPicker {
       else notes.set(card.path, [card]);
     }
     const unavailable = [...this.selected].filter(([id]) => !available.has(id));
-    const showSelectedOnly = this.selectedOnly.checked;
     const query = this.search.value.trim().toLocaleLowerCase();
     this.root.disabled = saving;
-    this.search.disabled = showSelectedOnly;
-    this.clear.disabled = !this.selected.size;
+    this.search.disabled = this.selectedOnly;
+    this.allButton.setAttribute("aria-pressed", String(!this.selectedOnly));
+    this.selectedButton.setAttribute("aria-pressed", String(this.selectedOnly));
+    this.clearButton.disabled = saving || !this.selected.size;
     this.count.setText(t("selectedCheckCardCount", { count: this.selected.size }));
     this.warning.setText(unavailable.length ? t("selectedCardsChanged") : "");
 
@@ -90,15 +107,16 @@ export class CardPicker {
 
     for (const [path, note] of notes) {
       const pathMatches = path.toLocaleLowerCase().includes(query);
-      const visible = note.filter(({ id, question }) => showSelectedOnly ? this.selected.has(id)
+      const visible = note.filter(({ id, question }) => this.selectedOnly ? this.selected.has(id)
         : pathMatches || question.toLocaleLowerCase().includes(query));
       if (!visible.length) continue;
       const group = this.list.createDiv({ cls: "study-cards-picker-note" });
       const { row, input, text } = addOption(group, `note:${path}`, path);
       row.addClass("study-cards-picker-note-option");
-      text.createSpan({ cls: "study-cards-picker-detail", text: t("eligibleNoteCardCount", { count: note.length }) });
-      input.setAttribute("aria-label", t("selectNoteCards", { path, count: note.length }));
       const checked = note.filter(({ id }) => this.selected.has(id)).length;
+      const count = t("questionSelectionCount", { selected: checked, total: note.length });
+      text.createSpan({ cls: "study-cards-picker-detail", text: count });
+      input.setAttribute("aria-label", t("selectNoteCards", { path, count: note.length }) + ". " + count);
       input.checked = checked === note.length;
       input.indeterminate = checked > 0 && !input.checked;
       input.onchange = () => {
@@ -116,10 +134,10 @@ export class CardPicker {
     }
     if (!this.list.childElementCount) {
       this.list.createDiv({ cls: "study-cards-picker-detail",
-        text: t(showSelectedOnly ? "noSelectedCheckCards" : "noMatchingCheckCards") });
+        text: t(this.selectedOnly ? "noSelectedCheckCards" : "noMatchingCheckCards") });
     }
     this.list.scrollTop = scrollTop;
-    if (focusedKey && !saving) (nextFocus ?? this.selectedOnly).focus({ preventScroll: true });
+    if (focusedKey && !saving) (nextFocus ?? this.filterButton).focus({ preventScroll: true });
     return this.selected.size > 0 && unavailable.length === 0;
   }
 
