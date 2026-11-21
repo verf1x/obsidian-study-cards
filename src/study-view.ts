@@ -1,6 +1,7 @@
 import { Component, ItemView, MarkdownRenderer, Modal, Notice, type App, type WorkspaceLeaf } from "obsidian";
 import { statuses, type Status } from "./markdown";
 import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
+import { renderStudyStorage } from "./study-storage-view";
 import type { Card, StudyCards } from "./study-cards";
 
 export const viewType = "study-cards";
@@ -40,6 +41,7 @@ export class StudyView extends ItemView {
     this.resetAnswers();
     root.empty();
     root.addClass("study-cards-view");
+    renderStudyStorage(this.app, root, this.study, opened);
     if (this.renderAlternateScreen(root)) return;
 
     const toolbar = root.createDiv({ cls: "study-cards-controls" });
@@ -69,10 +71,16 @@ export class StudyView extends ItemView {
     });
     sources.open = opened.has("sources");
     sources.createEl("summary", { text: "Источники · " + section.sources.length });
+    const missing = new Set(this.study.missingSources(section.id).map(({ id }) => id));
+    if (missing.size) sources.open = true;
     for (const source of section.sources) {
       const row = sources.createDiv({ cls: "study-cards-controls study-cards-item" });
       row.createSpan({ text: (source.path || "Корень хранилища") + (source.recursive ? " · с подпапками" : "") });
-      if (source.kind === "folder") {
+      if (missing.has(source.id)) {
+        row.createSpan({ text: "Недоступен" });
+        row.createEl("button", { text: "Переподключить" }).onclick = () =>
+          new SelectSourcesModal(this.app, this.study, this.watch, section.id, [], false, source).open();
+      } else if (source.kind === "folder") {
         row.createEl("button", { text: "Настроить" }).onclick = () =>
           new SelectSourcesModal(this.app, this.study, this.watch, section.id, [source], true).open();
       }

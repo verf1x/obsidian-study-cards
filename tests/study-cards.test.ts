@@ -5,12 +5,29 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { StudyCards, type StudyData, type StudyVault } from "../src/study-cards";
+import { StudyCards, type StudyVault } from "../src/study-cards";
+
+import { StudyStorage, type StudyStorageIO } from "../src/study-storage";
 
 async function testVault() {
   const root = await mkdtemp(join(tmpdir(), "study-cards-"));
   const paths = new Set<string>();
-  let data: StudyData | undefined;
+  let state: string | null = null;
+  let local: unknown;
+  let persistHook: ((apply: () => void) => void | Promise<void>) | undefined;
+  const io: StudyStorageIO = {
+    async readShared() { return state; },
+    async writeShared(expected, next) {
+      const apply = () => {
+        if (state !== expected) throw new Error("changed");
+        state = next;
+      };
+      if (persistHook) await persistHook(apply);
+      else apply();
+    },
+    async readDevice() { return structuredClone(local); },
+    async writeDevice(next) { local = structuredClone(next); },
+  };
   let beforeWrite: (() => Promise<void>) | undefined;
   const dirty = new Set<string>();
   const files: StudyVault = {
@@ -39,7 +56,8 @@ async function testVault() {
   };
   return {
     files,
-    open: () => new StudyCards(files, data, async (next) => { data = structuredClone(next); }, randomUUID),
+    open: async () => new StudyCards(files, await StudyStorage.open(io, null, randomUUID), randomUUID),
+    beforePersist: (hook?: typeof persistHook) => { persistHook = hook; },
     hook: (fn: () => Promise<void>) => { beforeWrite = fn; },
     dirty,
     edit: (path: string, source: string) => writeFile(join(root, path), source),
@@ -65,7 +83,7 @@ test("подключает файл, сохраняет оформление и 
   t.after(vault.cleanup);
   const source = "---\r\ntitle: 'Пример' # сохранить\r\n---\r\nВступление\r\n# Вопрос\r\nОтвет\r\n";
   await vault.files.create("Конспект.md", source);
-  let study = vault.open();
+  let study = await vault.open();
   const section = await study.addSection("История");
   const preview = study.preview(section, [{ kind: "file", path: "Конспект.md" }]);
   const [row] = await preview.refresh();
@@ -78,7 +96,7 @@ test("подключает файл, сохраняет оформление и 
   const saved = await vault.files.read("Конспект.md");
   assert.ok(saved.includes("title: 'Пример' # сохранить\r\n"));
   assert.ok(saved.includes("Вступление\r\n# Вопрос\r\nОтвет\r\n"));
-  study = vault.open();
+  study = await vault.open();
   await study.scan();
   assert.equal(study.activeSection, section);
   assert.equal(study.cards(section)[0]?.id, card.id);
@@ -94,7 +112,7 @@ test("обновляет предпросмотр папки и сохраняе
   await vault.files.create("Папка/Черновик.md", "## Черновик\n");
   await vault.files.create("Папка/Позже.md", "## Позже\n");
   await vault.files.create("Папка/Вложенная/Тема.md", marked + "## Вложенный вопрос\n");
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Темы");
   const preview = study.preview(section, [{ kind: "folder", path: "Папка", format: collection }]);
   let rows = await preview.refresh();
@@ -150,7 +168,7 @@ test("сохраняет исключение при переименовани�
   const excluded = "# Черновик\nОтвет\n";
   await vault.files.create("Черновик.md", excluded);
   await vault.files.create("Вопрос.md", "# Вопрос\nОтвет\n");
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Курс");
   const preview = study.preview(section, [{ kind: "file", path: "Черновик.md" }]);
   await preview.refresh();
@@ -170,7 +188,7 @@ test("запрашивает повторное подтверждение по�
   const vault = await testVault();
   t.after(vault.cleanup);
   await vault.files.create("Тема.md", "# Старый вопрос\nСтарый ответ\n");
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Курс");
   const preview = study.preview(section, [{ kind: "file", path: "Тема.md" }]);
   await preview.refresh();
@@ -193,7 +211,7 @@ test("показывает выбор формата при пересечени
   const vault = await testVault();
   t.after(vault.cleanup);
   await vault.files.create("Корень/Темы/Вопросы.md", "---\nqcards_source: true\n---\n# Введение\n## Один\nА\n## Два\nБ");
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Курс");
   const collection = { mode: "collection", level: 2 } as const;
   const sources = [
@@ -218,7 +236,7 @@ test("показывает выбор формата при пересечени
 test("создаёт заметки с шаблоном и без него и выделяет заголовки H1–H6", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Заметки");
   const blank = await study.createCard(section, "Пустая", "Курс", { mode: "single", question: "filename" }, false);
   const original = study.cards(section)[0]!;
@@ -251,7 +269,7 @@ test("создаёт заметки с шаблоном и без него и в
 test("сохраняет историю при переименовании, отключении, удалении и возврате UUID", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  let study = vault.open();
+  let study = await vault.open();
   const first = await study.addSection("Первая тема");
   const path = await study.createCard(first, "Вопрос", "", { mode: "single", question: "heading" }, true);
   const card = study.cards(first)[0]!;
@@ -276,7 +294,7 @@ test("сохраняет историю при переименовании, о�
   await study.delete(newPath);
   assert.equal(study.cards(second).length, 0);
   await vault.files.create(newPath, saved);
-  study = vault.open();
+  study = await vault.open();
   await study.scan();
   assert.equal(study.cards(second)[0]?.id, card.id);
   assert.deepEqual(study.cards(second)[0]?.progress, progress);
@@ -285,7 +303,7 @@ test("сохраняет историю при переименовании, о�
 test("блокирует спорную историю и разрешает конфликты UUID в файлах и секциях", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Материалы");
   const path = await study.createCard(section, "Оригинал", "", { mode: "single", question: "filename" }, false);
   let original = study.cards(section)[0]!;
@@ -326,7 +344,7 @@ test("блокирует спорную историю и разрешает к�
 test("показывает пропавший UUID после перезапуска и возвращает историю при восстановлении ID", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  let study = vault.open();
+  let study = await vault.open();
   const section = await study.addSection("Коллекции");
   const path = await study.createCard(section, "Темы", "", { mode: "collection", level: 2 }, true);
   const card = study.cards(section)[0]!;
@@ -334,7 +352,7 @@ test("показывает пропавший UUID после перезапус
   await study.saveProgress(card, { history: [1] });
   await vault.edit(path, original.replace(/<!-- qcards:id=.* -->\n/, "")
     .replace("## Вопрос", "## Уточнённый вопрос").replace("Ответ", "Переписанный ответ"));
-  study = vault.open();
+  study = await vault.open();
   await study.scan();
   let missing = study.cards(section)[0]!;
   assert.equal(missing.identity, "missing");
@@ -355,7 +373,7 @@ test("показывает пропавший UUID после перезапус
 test("исправляет статус и сохраняет тематические теги, оформление списка и расписание", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Статусы");
   const path = await study.createCard(section, "Одна", "", { mode: "single", question: "heading" }, false);
   const card = study.cards(section)[0]!;
@@ -385,7 +403,7 @@ test("исправляет статус и сохраняет тематичес
 test("читает статус каждой секции и сохраняет её Markdown за пределами служебной строки", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Секции");
   const path = await study.createCard(section, "Коллекция", "", { mode: "collection", level: 2 }, false);
   const props = await vault.files.read(path);
@@ -406,7 +424,7 @@ test("читает статус каждой секции и сохраняет 
 test("сохраняет индентированный код в ответе и при смене статуса", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Код");
   const path = await study.createCard(section, "Коллекция", "", { mode: "collection", level: 2 }, false);
   const code = "    #qcards/status/studied\n    kept as code";
@@ -432,7 +450,7 @@ test("сохраняет индентированный код в ответе �
 test("вставляет свойства перед концом YAML-документа и сохраняет переставленные UUID", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Темы");
   const path = "Конспект.md";
   const first = "## Первый\nПервый ответ\n";
@@ -461,7 +479,7 @@ test("вставляет свойства перед концом YAML-доку�
 test("обнаруживает потерю UUID при перестановке и полном переписывании вопроса", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
-  const study = vault.open();
+  const study = await vault.open();
   const section = await study.addSection("Темы");
   const path = await study.createCard(section, "Коллекция", "", { mode: "collection", level: 2 }, false);
   const props = await vault.files.read(path);
@@ -480,4 +498,130 @@ test("обнаруживает потерю UUID при перестановке
   await vault.edit(path, props + third + "\n" + second + first);
   await study.update(path);
   assert.deepEqual(study.cards(section)[1]?.progress, history);
+});
+
+test("интервальная оценка и срок сохраняются вместе, повтор не создаёт дубль, отмена возвращает срок", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  let study = await vault.open();
+  const sectionId = await study.addSection("Интервалы");
+  await study.createCard(sectionId, "Вопрос", "", { mode: "single", question: "filename" }, false);
+  await study.setStatus(study.cards(sectionId)[0]!, "studied");
+  const selected = study.cards(sectionId)[0]!;
+  const uuid = selected.id!;
+  const sessionId = randomUUID();
+  const review = { sectionId, sessionId, at: "2026-11-21T10:00:00Z", grade: "good" as const };
+  const intent = { id: randomUUID(), revision: study.progress.revision };
+
+  vault.beforePersist(() => {
+    assert.equal(study.persistence.saving, true);
+    assert.equal(study.progress.progress[uuid], undefined);
+    throw new Error("disk full");
+  });
+  await assert.rejects(study.recordReview(intent, selected, review, { dueAt: "2026-11-22T10:00:00Z" }), /Повторите действие/);
+  assert.equal(study.progress.progress[uuid], undefined);
+  study = await vault.open();
+  await study.scan();
+  assert.equal(study.progress.progress[uuid], undefined);
+
+  vault.beforePersist((apply) => { apply(); throw new Error("response lost"); });
+  const first = study.cards(sectionId)[0]!;
+  await Promise.all([
+    study.recordReview(intent, first, review, { dueAt: "2026-11-22T10:00:00Z" }),
+    study.recordReview(intent, first, review, { dueAt: "2026-11-22T10:00:00Z" }),
+  ]);
+  vault.beforePersist();
+  study = await vault.open();
+  await study.scan();
+  await study.recordReview(intent, first, review, { dueAt: "2026-11-22T10:00:00Z" });
+  assert.deepEqual(study.progress.progress[uuid]?.reviews?.map(({ id }) => id), [intent.id]);
+  assert.deepEqual(study.progress.progress[uuid]?.schedule, { dueAt: "2026-11-22T10:00:00Z" });
+
+  const second = { id: randomUUID(), revision: study.progress.revision };
+  await study.recordReview(second, study.cards(sectionId)[0]!, { ...review, at: "2026-11-22T10:00:00Z" }, { dueAt: "2026-11-28T10:00:00Z" });
+  assert.equal(study.progress.progress[uuid]?.reviews?.length, 2);
+  await study.undoReview({ id: randomUUID(), revision: study.progress.revision }, uuid, sessionId, second.id);
+  assert.deepEqual(study.progress.progress[uuid]?.reviews?.map(({ id }) => id), [intent.id]);
+  assert.deepEqual(study.cards(sectionId)[0]?.progress?.schedule, { dueAt: "2026-11-22T10:00:00Z" });
+});
+
+test("свободная проверка сохраняет исправленную оценку, порядок и позицию недоступного вопроса", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  let study = await vault.open();
+  const sectionId = await study.addSection("Свободная проверка");
+  const oldPath = await study.createCard(sectionId, "Первый", "", { mode: "single", question: "filename" }, false);
+  await study.createCard(sectionId, "Второй", "", { mode: "single", question: "filename" }, false);
+  const first = study.cards(sectionId).find(({ path }) => path === oldPath)!.id!;
+  const second = study.cards(sectionId).find(({ path }) => path === "Второй.md")!.id!;
+  const mutation = () => ({ id: randomUUID(), revision: study.progress.revision });
+  const startedAt = "2026-11-21T10:00:00Z";
+  const session = { id: randomUUID(), sectionId, startedAt, retryOf: null, cardIds: [first, second], position: 0,
+    grades: { [first]: "correct" as const } };
+  await study.saveFreeCheck(mutation(), session);
+  await study.saveFreeCheck(mutation(), { ...session, position: 1, grades: { [first]: "incorrect" } });
+  const saved = await vault.files.read(oldPath);
+  const source = study.sections[0]!.sources.find(({ path }) => path === oldPath)!;
+  await vault.delete(oldPath);
+  study = await vault.open();
+  await study.scan();
+  assert.equal(study.progress.freeSession?.position, 1);
+  assert.deepEqual(study.freeCheckQuestions().map(({ id, card, grade }) => [id, card?.path ?? null, grade]),
+    [[first, null, "incorrect"], [second, "Второй.md", null]]);
+  assert.deepEqual(study.missingSources(sectionId).map(({ id }) => id), [source.id]);
+  await study.saveFreeCheck(mutation(), { ...session, position: 0, grades: {} });
+  assert.equal(study.freeCheckQuestions()[0]?.grade, "incorrect");
+
+  const newPath = "Перенос/Первый.md";
+  await vault.files.create(newPath, saved);
+  const reconnect = study.preview(sectionId, [{ kind: "file", path: newPath, format: source.format }], source.id);
+  await reconnect.refresh();
+  assert.deepEqual(await reconnect.confirm(), { confirmed: true });
+  assert.equal(study.freeCheckQuestions()[0]?.card?.id, first);
+  assert.equal(study.freeCheckQuestions()[0]?.card?.path, newPath);
+  assert.equal(study.freeCheckQuestions()[0]?.grade, "incorrect");
+  assert.equal(study.missingSources(sectionId).length, 0);
+
+  const finish = mutation();
+  const finishedAt = "2026-11-21T11:00:00Z";
+  vault.beforePersist(() => { throw new Error("disk full"); });
+  await assert.rejects(study.finishFreeCheck(finish, session.id, finishedAt), /Повторите действие/);
+  assert.equal(study.progress.freeResults.length, 0);
+  assert.equal(study.progress.freeSession?.id, session.id);
+  vault.beforePersist((apply) => { apply(); throw new Error("response lost"); });
+  await study.finishFreeCheck(finish, session.id, finishedAt);
+  study = await vault.open();
+  await study.scan();
+  await study.finishFreeCheck(finish, session.id, finishedAt);
+  assert.equal(study.progress.freeSession, null);
+  assert.equal(study.progress.freeResults.length, 1);
+
+  vault.beforePersist();
+  const retry = { id: randomUUID(), sectionId, startedAt: finishedAt, retryOf: session.id, cardIds: [first], position: 0, grades: {} };
+  await study.setStatus(study.cards(sectionId).find(({ id }) => id === first)!, "studied");
+  const retryCard = study.cards(sectionId).find(({ id }) => id === first)!;
+  await study.recordReview(mutation(), retryCard,
+    { sectionId, sessionId: randomUUID(), at: finishedAt, grade: "hard" }, { dueAt: "2026-11-24T11:00:00Z" });
+  await study.setSuspended(mutation(), retryCard, true);
+  await study.saveFreeCheck(mutation(), retry);
+  const beforeExport = study.progress;
+  const exported = await study.exportStudyData();
+  await study.addSection("Новые данные");
+  const preview = await study.previewImport(exported);
+  assert.equal(preview.incoming.intervalReviews, 1);
+  assert.equal(preview.incoming.freeResults, 1);
+  assert.equal(preview.incoming.pendingCheck?.retry, true);
+  await study.importStudyData(preview);
+  assert.deepEqual(study.progress.progress, beforeExport.progress);
+  assert.deepEqual(study.progress.freeResults, beforeExport.freeResults);
+  assert.deepEqual(study.progress.freeSession, beforeExport.freeSession);
+  study = await vault.open();
+  await study.scan();
+  assert.equal(study.progress.freeSession?.retryOf, session.id);
+  await study.finishFreeCheck(mutation(), retry.id, finishedAt);
+  assert.equal(study.progress.freeResults.length, 1);
+  await study.saveFreeCheck(mutation(), { ...retry, id: randomUUID() });
+  await study.discardFreeCheck(mutation(), study.progress.freeSession!.id);
+  assert.equal(study.progress.freeSession, null);
+  assert.equal(study.progress.freeResults.length, 1);
 });

@@ -1,3 +1,4 @@
+import { isCardId } from "./card-id";
 import MarkdownIt from "markdown-it";
 import { isMap, isScalar, isSeq, parseDocument, stringify, type YAMLMap, type YAMLSeq } from "yaml";
 
@@ -28,7 +29,6 @@ markdown.block.ruler.before("heading", "obsidian_comment", (state, start, end, s
   return true;
 }, { alt: ["paragraph"] });
 
-const uuid = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 const statusPrefix = "qcards/status/";
 const statusTag = /^(?:#)?qcards\/status(?:\/[\p{L}\p{N}_/-]*)?$/iu;
 const collectionId = /^ {0,3}<!--[ \t]*qcards:id[ \t]*=[ \t]*(.*?)[ \t]*-->[ \t]*(?:\r?\n|$)/i;
@@ -162,8 +162,8 @@ export class MarkdownNote {
         answer: trimBlankLines(this.source.slice(heading?.after ?? this.bodyStart)),
         from: heading?.from ?? this.bodyStart,
         to: this.source.length,
-        id: typeof id === "string" && uuid.test(id) ? id.toLowerCase() : null,
-        invalidId: this.properties?.has("qcards_id") === true && !(typeof id === "string" && uuid.test(id)),
+        id: isCardId(id) ? id.toLowerCase() : null,
+        invalidId: this.properties?.has("qcards_id") === true && !(isCardId(id)),
         status: readStatus(this.tags()),
       }];
     }
@@ -171,7 +171,7 @@ export class MarkdownNote {
     return this.sections(format.level, headings).map(({ heading, to, id, statusLine }) => {
       const content = this.source.slice(statusLine?.to ?? id?.to ?? heading.after, to);
       const rawId = id?.match[1];
-      const validId = typeof rawId === "string" && uuid.test(rawId);
+      const validId = isCardId(rawId);
       const tags = statusLine?.match[1]?.split(/[ \t]+/) ?? [];
       const otherTags = tags.filter((tag) => !statusTag.test(tag));
       return {
