@@ -268,7 +268,8 @@ test("проверка перед показом пропускает нечит
   await study.recheckIntervalSource(second);
   assert.equal(session.refreshQuestion().question, undefined);
   vault.unreadable.delete(first);
-  await study.update(first);
+  const restarted = await IntervalSession.start(study, section);
+  assert.equal(restarted.refreshQuestion().question?.card.path, first);
   assert.equal(session.refreshQuestion().question?.card.path, first);
 });
 

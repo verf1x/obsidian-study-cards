@@ -17,6 +17,7 @@ export interface StudyVault {
 export type { CardProgress, Source, SourceRequest } from "./study-state";
 
 export type ProgressMutation = Pick<StudyMutation, "id" | "revision">;
+const unreadableNote = "Заметка недоступна для чтения";
 
 interface IndexedNote {
   note: MarkdownNote;
@@ -383,9 +384,8 @@ export class StudyCards {
       note = saved ?? await this.read(path);
     } catch {
       const indexed = this.index.get(path);
-      const error = "Заметка недоступна для чтения";
-      if (indexed && indexed.error !== error) {
-        this.index.set(path, { ...indexed, error });
+      if (indexed && indexed.error !== unreadableNote) {
+        this.index.set(path, { ...indexed, error: unreadableNote });
         this.catalogChangeCount++;
       }
       return;
@@ -434,8 +434,19 @@ export class StudyCards {
   }
 
   recheckIntervalSource(path: string) {
-    return this.run("Проверка источника интервального повторения", () => this.reconcile(path, false, undefined, false),
-      { background: true });
+    return this.recheckIntervalSources([path]);
+  }
+
+  retryUnreadableIntervalSources(sectionId: string) {
+    const paths = [...this.catalog.index].flatMap(([path, { error, sections }]) =>
+      error === unreadableNote && sections.includes(sectionId) ? [path] : []);
+    if (paths.length) return this.recheckIntervalSources(paths);
+  }
+
+  private recheckIntervalSources(paths: string[]) {
+    return this.run("Проверка источников интервального повторения", async () => {
+      for (const path of paths) await this.reconcile(path, false, undefined, false);
+    }, { background: true });
   }
 
   refreshSources() {

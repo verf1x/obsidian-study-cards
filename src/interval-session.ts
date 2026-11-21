@@ -50,6 +50,8 @@ export class IntervalSession {
     private readonly id = globalThis.crypto.randomUUID()) {}
 
   static async start(study: StudyCards, sectionId: string, clock = () => new Date()) {
+    const retry = study.retryUnreadableIntervalSources(sectionId);
+    if (retry) await retry;
     const cardIds = new Set(study.intervalCards(sectionId).map(({ id }) => id));
     return new IntervalSession(study, sectionId, cardIds, await loadScheduler(), clock);
   }
