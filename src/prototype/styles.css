@@ -11,8 +11,7 @@
   overflow-wrap: anywhere;
 }
 
-.study-cards-prototype button,
-.study-cards-prototype select,
+.study-cards-prototype :is(button, select):not(:where(.study-cards-markdown *)),
 .study-cards-prototype-modal :is(button, select, input),
 .study-cards-source-modal :is(button, select) {
   min-height: 44px;
@@ -26,20 +25,17 @@
   background-color: var(--interactive-normal);
 }
 
-.study-cards-prototype h1,
-.study-cards-prototype h2,
-.study-cards-prototype h3,
-.study-cards-prototype p,
+.study-cards-prototype :is(h1, h2, h3, p):not(:where(.study-cards-markdown *)),
 .study-cards-prototype-modal p {
   margin: 0;
 }
 
-.study-cards-prototype h1 {
+.study-cards-prototype h1:not(:where(.study-cards-markdown *)) {
   font-size: clamp(1.35rem, 1rem + 1.5cqi, 2.25rem);
   line-height: 1.2;
 }
 
-.study-cards-prototype h2 {
+.study-cards-prototype h2:not(:where(.study-cards-markdown *)) {
   font-size: 1.125rem;
 }
 
@@ -110,7 +106,7 @@
   padding-inline: 0.4rem;
 }
 
-.study-cards-prototype summary {
+.study-cards-prototype summary:not(:where(.study-cards-markdown *)) {
   align-content: center;
   cursor: pointer;
   min-height: 44px;
@@ -130,11 +126,11 @@
   padding: 0;
 }
 
-.study-cards-catalog-list summary {
+.study-cards-catalog-list .study-cards-item > summary {
   padding: 0.5rem 0.25rem;
 }
 
-.study-cards-catalog-list summary:hover,
+.study-cards-catalog-list .study-cards-item > summary:hover,
 .study-cards-table-row:not(.study-cards-table-header):hover {
   background: var(--background-modifier-hover);
 }
@@ -157,16 +153,41 @@
 .study-cards-status[data-status="mastered"] { color: var(--color-green); }
 .study-cards-status[data-status="invalid"] { color: var(--text-error); }
 
-.study-cards-catalog-list details > div,
-.study-cards-catalog-table details > div,
+.study-cards-card-body,
 .study-cards-catalog-detail {
   min-width: 0;
-  padding: 0.75rem;
-  background: var(--study-cards-surface);
+  padding: clamp(0.75rem, 2cqi, 1.5rem);
+  background: var(--background-primary);
 }
 
-.study-cards-start-here {
-  margin-bottom: 0.5rem;
+.study-cards-card-body {
+  max-width: 55rem;
+  margin-block: 0.35rem 0.75rem;
+  margin-inline: auto;
+  border: 1px solid var(--study-cards-border);
+  border-radius: var(--study-cards-radius);
+}
+
+.study-cards-card-body > *,
+.study-cards-catalog-detail > * {
+  max-width: 52rem;
+  margin-inline: auto;
+}
+
+.study-cards-card-actions {
+  padding-block-end: 0.75rem;
+  border-bottom: 1px solid var(--study-cards-border);
+}
+
+.study-cards-card-actions label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.study-cards-card-actions .study-cards-start-here {
+  margin-inline-start: auto;
 }
 
 .study-cards-table-row {
@@ -218,8 +239,7 @@
   background: var(--background-modifier-hover);
 }
 
-.study-cards-catalog-detail h3 { margin-bottom: 0.45rem; }
-.study-cards-catalog-detail .study-cards-status { margin-inline-end: 0.45rem; }
+.study-cards-catalog-detail > h3 { margin-bottom: 0.65rem; }
 
 .study-cards-empty {
   color: var(--text-muted);
@@ -303,20 +323,11 @@
   padding: clamp(0.7rem, 2.3cqi, 1.5rem);
   border: 1px solid var(--study-cards-border);
   border-radius: var(--study-cards-radius);
-  background: var(--study-cards-surface);
+  background: var(--background-primary);
 }
 
-.study-cards-answer :is(.markdown-rendered p, .markdown-rendered h3, .markdown-rendered h4) {
-  margin-block: 0.75em;
-}
-
-.study-cards-answer :is(pre, table),
-.study-cards-catalog-detail :is(pre, table),
-.study-cards-catalog-list :is(pre, table),
-.study-cards-catalog-table :is(pre, table) {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
+.study-cards-answer > h2 {
+  margin-block-end: 0.65rem;
 }
 
 .study-cards-prototype img {
@@ -438,6 +449,7 @@
   .study-cards-table-row { grid-template-columns: 3ch minmax(0, 1fr) minmax(5.5rem, auto); }
   .study-cards-table-path,
   .study-cards-table-header > :nth-child(3) { display: none; }
+  .study-cards-card-actions .study-cards-start-here { margin-inline-start: 0; }
 }
 
 @container (max-width: 25rem) {
@@ -445,6 +457,8 @@
   .study-cards-section-header button { width: 100%; }
   .study-cards-check-nav button { flex: 1; }
   .study-cards-counts > div { padding-inline: 0.4rem; }
+  .study-cards-markdown .study-cards-table-scroll > table { font-size: 0.9em; }
+  .study-cards-markdown .study-cards-table-scroll :is(th, td) { padding-inline: 0.45em; }
 }
 
 @media (pointer: coarse) {

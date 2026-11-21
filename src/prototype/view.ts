@@ -174,7 +174,6 @@ export class PrototypeView extends StudyView {
     });
     const detail = split.createDiv({ cls: "study-cards-catalog-detail" });
     detail.createEl("h3", { text: selected.question });
-    this.renderCardSummary(detail, selected);
     this.renderCardBody(detail, selected);
   }
 
@@ -186,14 +185,13 @@ export class PrototypeView extends StudyView {
     });
   }
 
-  protected renderCardBody(root: HTMLElement, card: Card) {
+  protected renderCardActions(root: HTMLElement, card: Card) {
     if (isCheckCard(card)) {
       const sectionId = this.study.activeSection!;
       const section = this.study.sections.find(({ id }) => id === sectionId)!;
       root.createEl("button", { text: "Начать с этой карточки", cls: "study-cards-start-here" }).onclick =
         () => this.setup(sectionId, section.name, card.id);
     }
-    super.renderCardBody(root, card);
   }
 
   private setup(sectionId: string, name: string, start?: string) {
@@ -293,7 +291,7 @@ export class PrototypeView extends StudyView {
         answer.createEl("h2", { text: "Эталон", attr: { tabindex: "-1", "data-focus": "answer" } });
         if (this.updated) answer.createEl("p", { text: "Эталон обновлён из заметки", cls: "study-cards-muted" });
         const scrollTop = this.scrollTop;
-        void this.renderMarkdown(answer.createDiv({ cls: "markdown-rendered" }), card).then(() => {
+        void this.renderMarkdown(answer.createDiv(), card).then(() => {
           if (scrollTop && body.isConnected) body.scrollTop = scrollTop;
         });
       } else {
@@ -360,7 +358,7 @@ export class PrototypeView extends StudyView {
     root.onkeydown = (event) => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat) return;
       const target = event.target as HTMLElement;
-      if (target.closest("a, input, select, textarea, summary, [contenteditable]")
+      if (target.closest("a, input, select, textarea, summary, pre, [contenteditable], .study-cards-table-scroll")
         || (event.key === " " && target.closest("button"))) return;
       const button = keys[event.key];
       if (!button || button.disabled) return;

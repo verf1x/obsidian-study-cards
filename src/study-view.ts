@@ -105,7 +105,7 @@ export class StudyView extends ItemView {
     if (summaryContent) summaryContent(summary);
     else summary.textContent = card.question;
     this.renderCardSummary(summary, card);
-    const body = details.createDiv();
+    const body = details.createDiv({ cls: "study-cards-card-body" });
     let rendered = false;
     const renderAnswer = () => {
       if (rendered || !details.open) return;
@@ -119,7 +119,7 @@ export class StudyView extends ItemView {
   protected renderCardSummary(_summary: HTMLElement, _card: Card) {}
 
   protected renderCardBody(root: HTMLElement, card: Card) {
-    const actions = root.createDiv({ cls: "study-cards-controls" });
+    const actions = root.createDiv({ cls: "study-cards-controls study-cards-card-actions" });
     actions.createEl("button", { text: card.path, attr: { "aria-label": "Открыть заметку " + card.path } }).onclick =
       () => this.perform(this.openNote(card.path));
     const select = actions.createEl("label", { text: "Статус освоения " }).createEl("select");
@@ -141,8 +141,9 @@ export class StudyView extends ItemView {
       actions.createSpan({ text: card.identity === "missing" ? "UUID отсутствует" : "Некорректный UUID" });
       actions.createEl("button", { text: "Создать новый ID" }).onclick = () => this.perform(this.study.repairId(card));
     }
+    this.renderCardActions(actions, card);
 
-    this.renderMarkdown(root.createDiv(), card);
+    void this.renderMarkdown(root.createDiv(), card);
     if (card.progress) {
       const results = root.createEl("details");
       results.createEl("summary", { text: "Результаты и расписание" });
@@ -151,9 +152,26 @@ export class StudyView extends ItemView {
     }
   }
 
-  protected renderMarkdown(root: HTMLElement, card: Card) {
-    return MarkdownRenderer.render(this.app, card.answer, root, card.path, this.answers)
-      .catch((error) => new Notice(message(error)));
+  protected renderCardActions(_root: HTMLElement, _card: Card) {}
+
+  protected async renderMarkdown(root: HTMLElement, card: Card) {
+    root.addClass("markdown-rendered", "study-cards-markdown");
+    try {
+      await MarkdownRenderer.render(this.app, card.answer, root, card.path, this.answers);
+      for (const table of root.querySelectorAll("table")) {
+        const parent = table.parentElement;
+        const scroll = parent?.matches(".table-wrapper, .study-cards-table-scroll")
+          ? parent : root.ownerDocument.createElement("div");
+        if (scroll !== parent) {
+          table.before(scroll);
+          scroll.append(table);
+        }
+        scroll.addClass("study-cards-table-scroll");
+        scroll.setAttrs({ tabindex: "0", role: "region", "aria-label": "Таблица" });
+      }
+    } catch (error) {
+      new Notice(message(error));
+    }
   }
 
   protected perform(promise: Promise<unknown>) {
