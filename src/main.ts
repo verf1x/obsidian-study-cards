@@ -5,6 +5,7 @@ import { sharedStudyPath, StudyStorage } from "./study-storage";
 import { studyVault } from "./obsidian-vault";
 import { message, sourceRequest, type VaultChange, type WatchVault } from "./source-modals";
 import { StudyCards, type SourceRequest } from "./study-cards";
+import { StudyCardsSettings } from "./study-storage-view";
 import { StudyView, viewType } from "./study-view";
 
 export default class StudyCardsPlugin extends Plugin {
@@ -23,6 +24,9 @@ export default class StudyCardsPlugin extends Plugin {
     const io = await obsidianStudyStorage(this.app, (close) => this.register(close));
     const storage = await StudyStorage.open(io, await this.loadData(), id);
     this.study = new StudyCards(studyVault(this.app), storage, id);
+    const settings = new StudyCardsSettings(this.app, this, this.study);
+    this.addSettingTab(settings);
+    this.register(() => settings.hide());
     this.registerView(viewType, (leaf) => this.createView(leaf, this.study, this.watch, this.openNote));
     this.addRibbonIcon("book-open", "Study Cards", () => this.perform(this.showView()));
     this.addCommand({ id: "open-study-cards", name: t("openStudyCards"), callback: () => this.perform(this.showView()) });

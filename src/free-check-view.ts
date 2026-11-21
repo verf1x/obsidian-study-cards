@@ -3,10 +3,10 @@ import { CheckPrompt } from "./free-check-modals";
 import { FreeCheckSetup } from "./free-check-setup";
 import { canAdvance, checkScore, isCheckCard, type CheckCard, type CheckSelection } from "./free-check";
 import { localization, t } from "./localization";
-import { renderPaneAction } from "./pane-action";
+import { renderPracticeRow } from "./pane-action";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
-import type { FreeGrade, FreeResult, FreeSession } from "./study-state";
+import type { FreeGrade, FreeResult, FreeSession, Section } from "./study-state";
 
 type Screen = { mode: "setup"; form: FreeCheckSetup }
   | { mode: "check"; id: string }
@@ -23,12 +23,16 @@ export class FreeCheckView {
   private answer?: { id: string; card: CheckCard; updated: boolean };
   private answerScroll = 0;
   private saving = false;
+  private currentHistoryOnly = false;
 
   constructor(private readonly app: App, private readonly study: StudyCards, private readonly root: HTMLElement,
     private readonly render: () => void, private readonly renderMarkdown: (root: HTMLElement, card: Card) => Promise<void>,
-    private readonly backToPractice: () => void, private readonly onCheckStarted: (sectionId: string) => void) {}
+    private readonly backToPractice: () => void, private readonly onCheckStarted: (sectionId: string) => void,
+    private readonly backToHistory: () => void) {}
 
   close() { this.screen = undefined; }
+
+  resume(id: string) { this.showCheck(id); }
 
   get settingUp() { return this.screen?.mode === "setup"; }
 
@@ -40,71 +44,76 @@ export class FreeCheckView {
   }
 
   renderPractice(root: HTMLElement, toolbar: HTMLElement, sectionId: string, name: string, introductory: boolean,
-    openNotes: () => void) {
-    const { session } = this.study.freeChecks;
+    openCards: () => void, renderReviews: () => void) {
+    const { session, results } = this.study.freeChecks;
     const cards = this.study.cards(sectionId);
-    if (session) {
-      const resume = root.createDiv({ cls: "study-cards-practice-resume" });
-      const label = resume.createDiv();
-      label.createEl("strong", { text: checkName(session) });
-      const position = t("checkPosition", { position: session.position + 1, total: session.cardIds.length });
-      label.createEl("p", { text: session.sectionId === sectionId ? position : `${this.sectionName(session.sectionId)} · ${position}` });
-      const button = resume.createEl("button", { cls: "mod-cta", attr: { "data-focus": "check-continue" } });
-      setIcon(button.createSpan({ cls: "study-cards-nav-icon", attr: { "aria-hidden": "true" } }), "circle-play");
-      button.createSpan({ text: t("continueFreeCheck") });
-      button.onclick = () => this.showCheck(session.id);
-    }
-    const start = (session ? root : toolbar).createEl("button", {
-      cls: session ? undefined : "mod-cta study-cards-test-action", attr: { "data-focus": "check-start" },
-    });
-    if (session) renderPaneAction(start, "circle-play", t("newFreeCheck"), "");
-    else {
-      setIcon(start.createSpan({ cls: "study-cards-nav-icon", attr: { "aria-hidden": "true" } }), "circle-play");
-      start.createSpan({ text: t("testYourself") });
-    }
     const eligible = cards.some(isCheckCard);
-    start.disabled = this.blocked() || !eligible;
-    start.onclick = () => this.setup(sectionId, name, { focus: "check-start", introductory });
     if (!eligible) {
-      const actions = root.createDiv({ cls: "study-cards-practice-row" });
-      actions.createEl("p", { text: t(cards.length ? "sectionWithoutEligibleCards" : "sectionWithoutCards") });
-      actions.createEl("button", { text: t("notes") }).onclick = openNotes;
+      const empty = root.createDiv({ cls: "study-cards-practice-row" });
+      empty.createEl("p", { text: t(cards.length ? "sectionWithoutEligibleCards" : "sectionWithoutCards") });
+      empty.createEl("button", { text: t("cards") }).onclick = openCards;
     }
-    const history = this.study.freeChecks.results.filter((result) => result.sectionId === sectionId);
+    if (session || eligible) {
+      const primary = root.createDiv({ cls: "study-cards-practice-primary" });
+      const label = primary.createDiv();
+      label.createEl("h3", { text: t(session ? "continueFreeCheck" : "freeCheck") });
+      label.createEl("p", { text: session
+        ? `${this.sectionName(session.sectionId)} · ${t("checkPosition", { position: session.position + 1, total: session.cardIds.length })}`
+        : t("freeCheckHint") });
+      const button = primary.createEl("button", { cls: "mod-cta", text: t(session ? "continueFreeCheck" : "testYourself"),
+        attr: { "data-focus": session ? "check-continue" : "check-start" } });
+      button.disabled = !session && this.blocked();
+      button.onclick = () => session ? this.showCheck(session.id) : this.setup(sectionId, name, { focus: "check-start", introductory });
+      if (session && eligible) {
+        const start = toolbar.createEl("button", { text: t("newFreeCheck"), attr: { "data-focus": "check-start" } });
+        start.disabled = this.blocked();
+        start.onclick = () => this.setup(sectionId, name, { focus: "check-start", introductory });
+      }
+    }
+    renderReviews();
+    const history = results.filter((result) => result.sectionId === sectionId);
     const latest = history[history.length - 1];
     if (latest) {
       const available = new Set(cards.filter(isCheckCard).map(({ id }) => id));
       const { mistakes } = checkScore(latest, available);
       if (mistakes.some((id) => available.has(id))) {
-        const retry = root.createEl("button");
-        renderPaneAction(retry, "rotate-cw", t("retryMistakes"), t("sectionCardCount", { count: mistakes.length }));
+        const retry = renderPracticeRow(root, t("latestCheckMistakes"), t("sectionCardCount", { count: mistakes.length }),
+          t("retryMistakes"));
         retry.disabled = this.blocked();
         retry.onclick = () => this.retry(latest);
       }
     }
   }
 
-  renderHistory(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
+  renderHistory(root: HTMLElement, section?: Section) {
     const { results } = this.study.freeChecks;
-    const history = results.filter((result) => result.sectionId === sectionId).reverse();
-    const latest = history[0];
-    const details = root.createEl("details", { attr: { "data-card": "check-history" } });
-    details.open = opened.has("check-history");
-    const visibleHistory = details.createEl("summary");
-    const latestScore = latest ? checkScore(latest, new Set()) : undefined;
-    renderPaneAction(visibleHistory, "history", t("checkHistory"), latestScore && latest
-      ? t("checkHistoryScore", { graded: latestScore.graded, total: latest.cardIds.length, correct: latestScore.correct })
-      : t("noCheckResults"));
+    root.createEl("h2", { text: t("checkHistory") });
+    const filters = root.createDiv({ cls: "study-cards-controls study-cards-history-filters" });
+    const currentOnly = this.currentHistoryOnly && Boolean(section);
+    const filter = (text: string, current: boolean) => {
+      const key = current ? "history-current" : "history-all";
+      const button = filters.createEl("button", { text, attr: { "aria-pressed": String(currentOnly === current), "data-focus": key } });
+      button.onclick = () => {
+        this.currentHistoryOnly = current;
+        this.render();
+        this.focus(`[data-focus="${key}"]`);
+      };
+    };
+    filter(t("allSections"), false);
+    if (section) filter(section.name, true);
+    const history = results.filter((result) => !currentOnly || result.sectionId === section?.id).reverse();
+    if (!history.length) root.createEl("p", { text: t("noCheckResults") });
     for (const result of history) {
       const { correct, graded } = checkScore(result, new Set());
       const date = localization.date(result.finishedAt);
-      const row = details.createEl("button");
-      renderPaneAction(row, "file-check", t("checkHistoryEntry", { check: checkName(result), date }),
-        t("checkHistoryScore", { graded, total: result.cardIds.length, correct }));
-      row.onclick = () => this.showResult(result.id);
+      const name = this.resultSectionName(result);
+      const detail = [t("checkHistoryEntry", { check: checkName(result), date }),
+        t("checkHistoryScore", { graded, total: result.cardIds.length, correct })].join(" · ");
+      const open = renderPracticeRow(root, name, detail, t("result"));
+      open.setAttribute("aria-label", t("openCheckResult", { name, date }));
+      open.onclick = () => this.showResult(result.id);
     }
   }
-
   renderCardAction(root: HTMLElement, card: Card, sectionId: string, name: string) {
     if (!isCheckCard(card)) return;
     const focus = `check-start:${card.id}`;
@@ -178,11 +187,19 @@ export class FreeCheckView {
     return this.study.sections.find(({ id }) => id === sectionId)?.name ?? t("sectionUnavailable");
   }
 
+  private resultSectionName(result: FreeResult) {
+    const section = this.study.sections.find(({ id }) => id === result.sectionId);
+    return section?.name ?? t("deletedSectionResult", { name: result.sectionName ?? t("sectionUnavailable") });
+  }
+
   private setup(sectionId: string, name: string,
     { focus, start, introductory = false }: { focus: string; start?: CheckCard; introductory?: boolean }) {
     this.replaceCheck((previousId) => {
       const container = this.root.ownerDocument.createElement("div");
-      const form = new FreeCheckSetup(container, { id: sectionId, name }, start, introductory,
+      const remembered = this.study.sections.find(({ id }) => id === sectionId)?.lastManualSelection ?? [];
+      const labels = start ? undefined : this.study.knownQuestions(remembered);
+      const selection = start ? new Map([[start.id, start]]) : new Map(remembered.map((id) => [id, labels?.get(id)]));
+      const form = new FreeCheckSetup(container, { id: sectionId, name }, start, introductory, selection,
         () => this.study.cards(sectionId, "source").filter(isCheckCard),
         () => {
           this.screen = undefined;
@@ -349,7 +366,7 @@ export class FreeCheckView {
     const { correct, graded, mistakes, ungraded, unavailable } = checkScore(result, new Set(cards.keys()));
     const report = root.createDiv({ cls: "study-cards-free-report" });
     report.createEl("h2", { text: t("checkResultHeading", { check: checkName(result) }), cls: "study-cards-free-title", attr: { tabindex: "-1" } });
-    report.createEl("p", { text: this.sectionName(result.sectionId) });
+    report.createEl("p", { text: this.resultSectionName(result) });
     const totals = report.createDiv({ cls: "study-cards-free-totals" });
     for (const [label, count] of [["correct", correct], ["incorrect", mistakes.length], ["ungradedAnswers", ungraded]] as const) {
       const item = totals.createDiv({ attr: { "data-total": label } });
@@ -362,16 +379,23 @@ export class FreeCheckView {
     if (ungraded) score.createEl("p", { text: [t("ungradedAvailableCount", { count: ungraded - unavailable }),
       t("ungradedUnavailableCount", { count: unavailable })].join(" · ") });
 
-    if (mistakes.length) {
-      report.createEl("h3", { text: t("mistakeQuestions") });
-      const list = report.createEl("ol", { cls: "study-cards-mistake-list" });
-      for (const id of mistakes) list.createEl("li", {
-        text: cards.get(id)?.question ?? t("numberedUnavailableCard", { position: result.cardIds.indexOf(id) + 1 }),
-      });
+    const known = this.study.knownQuestions(result.cardIds);
+    const list = report.createEl("ol", { cls: "study-cards-result-answers" });
+    for (const [index, id] of result.cardIds.entries()) {
+      const row = list.createEl("li");
+      row.createEl("strong", { text: cards.get(id)?.question ?? known.get(id)?.question
+        ?? t("numberedUnavailableCard", { position: index + 1 }) });
+      const grade = result.grades[id];
+      row.createEl("small", { text: t(grade ?? "ungradedAnswers") });
     }
     const actions = report.createDiv({ cls: "study-cards-controls study-cards-report-actions" });
+    actions.createEl("button", { text: t("history") }).onclick = () => {
+      this.screen = undefined;
+      this.currentHistoryOnly = false;
+      this.backToHistory();
+    };
     actions.createEl("button", { text: t("backToPractice"), cls: "study-cards-quiet-button" }).onclick = () => this.practice();
-    if (mistakes.length) {
+    if (mistakes.length && this.study.sections.some(({ id }) => id === result.sectionId)) {
       const canRetry = mistakes.some((id) => cards.has(id));
       if (!canRetry) report.createEl("p", { text: t("allMistakesUnavailable") });
       const retry = actions.createEl("button", { text: t("retryMistakes"), cls: "mod-cta" });

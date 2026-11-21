@@ -1,4 +1,4 @@
-import { Modal, Notice, Platform, type App } from "obsidian";
+import { Modal, Notice, Platform, PluginSettingTab, Setting, type App, type Plugin } from "obsidian";
 import { localization, t } from "./localization";
 import { message } from "./source-modals";
 import type { StudyCards } from "./study-cards";
@@ -42,8 +42,8 @@ async function saveSnapshot(app: App, root: HTMLElement, snapshot: Promise<strin
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function renderStudyStorage(app: App, root: HTMLElement, study: StudyCards, opened: Set<string | null>) {
-  const { token, problem, saving, hasBeforeImport } = study.persistence;
+export function renderStudyStorage(app: App, root: HTMLElement, study: StudyCards) {
+  const { token, problem, saving } = study.persistence;
   const report = (task: Promise<unknown>) => { void task.catch((error) => new Notice(message(error))); };
   if (saving) root.createEl("p", { text: t("savingStudyData"), attr: { role: "status" } });
   if (problem) {
@@ -84,23 +84,29 @@ export function renderStudyStorage(app: App, root: HTMLElement, study: StudyCard
     refresh.onclick = () => report(study.refreshStorage());
   }
 
-  const tools = root.createEl("details", { attr: { "data-card": "study-storage" } });
-  tools.open = opened.has("study-storage") || (problem?.kind === "recovery" && !saving);
-  tools.createEl("summary", { text: t("studyCardsData") });
-  const controls = tools.createDiv({ cls: "study-cards-controls" });
-  const save = controls.createEl("button", { text: t("exportSnapshot") });
-  save.disabled = saving;
-  save.onclick = () => report(saveSnapshot(app, root, study.exportStudyData(), "study-cards.json"));
-  if (hasBeforeImport) {
-    const label = Platform.isMobile ? t("saveBeforeImport") : t("downloadBeforeImport");
-    controls.createEl("button", { text: label }).onclick =
-      () => report(saveSnapshot(app, root, Promise.resolve(study.exportBeforeImport()), "study-cards-before-import.json"));
-  }
-  const picker = controls.createEl("input", { type: "file", attr: { accept: ".json,application/json" } });
+  if (problem?.kind === "recovery") renderSnapshotActions(app, root, study);
+}
+
+function renderSnapshotActions(app: App, root: HTMLElement, study: StudyCards) {
+  const report = (task: Promise<unknown>) => { void task.catch((error) => new Notice(message(error))); };
+  const settings = new Setting(root).setName(t("studyCardsData")).setDesc(t("snapshotTransferHint"));
+  const picker = settings.settingEl.createEl("input", { type: "file", attr: { accept: ".json,application/json" } });
   picker.hidden = true;
-  const load = controls.createEl("button", { text: t("importSnapshot") });
-  load.disabled = saving || problem?.kind === "unsupported" || problem?.kind === "conflict";
-  load.onclick = () => picker.click();
+  settings.addButton((button) => button.setButtonText(t("exportSnapshot")).onClick(() =>
+    report(saveSnapshot(app, root, study.exportStudyData(), "study-cards.json"))));
+  settings.addButton((button) => button.setButtonText(t("importSnapshot")).onClick(() => picker.click()));
+  const label = Platform.isMobile ? t("saveBeforeImport") : t("downloadBeforeImport");
+  const beforeImport = new Setting(root).setName(label);
+  beforeImport.addButton((button) => button.setButtonText(label).onClick(() =>
+    report(saveSnapshot(app, root, Promise.resolve(study.exportBeforeImport()), "study-cards-before-import.json"))));
+  const [save, load] = settings.controlEl.querySelectorAll<HTMLButtonElement>("button");
+  const update = () => {
+    const { problem, saving, hasBeforeImport } = study.persistence;
+    save!.disabled = saving;
+    load!.disabled = saving || problem?.kind === "unsupported" || problem?.kind === "conflict";
+    beforeImport.settingEl.hidden = !hasBeforeImport;
+  };
+  update();
   picker.onchange = () => {
     const file = picker.files?.[0];
     picker.value = "";
@@ -109,6 +115,27 @@ export function renderStudyStorage(app: App, root: HTMLElement, study: StudyCard
       new ImportModal(app, study, raw, preview).open();
     }));
   };
+  return update;
+}
+
+export class StudyCardsSettings extends PluginSettingTab {
+  private unsubscribe?: () => void;
+
+  constructor(app: App, plugin: Plugin, private readonly study: StudyCards) { super(app, plugin); }
+
+  display() {
+    this.hide();
+    this.containerEl.empty();
+    const advanced = this.containerEl.createEl("details", { cls: "study-cards-advanced-settings" });
+    advanced.createEl("summary", { text: t("advancedStudySettings") });
+    const update = renderSnapshotActions(this.app, advanced, this.study);
+    this.unsubscribe = this.study.subscribe(update);
+  }
+
+  hide() {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
 }
 
 class RestoreModal extends Modal {

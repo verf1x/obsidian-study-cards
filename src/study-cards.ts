@@ -69,16 +69,6 @@ function sourceIncludesNote(source: Source, note: MarkdownNote) {
   return includesPath(source, note.path) && (source.kind === "file" || (note.marked && !source.excluded.includes(note.path)));
 }
 
-function moveNoteSelections(section: Section, oldPath: string, newPath: string) {
-  const selections = section.noteSelections;
-  if (!selections || oldPath === newPath) return;
-  for (const [path, ids] of Object.entries(selections)) {
-    if (!hasPath(path, oldPath)) continue;
-    delete selections[path];
-    selections[remapPath(path, oldPath, newPath)] = ids;
-  }
-}
-
 function answerHash(answer: string) {
   let hash = 0;
   for (let index = 0; index < answer.length; index++) hash = Math.imul(hash, 31) + answer.charCodeAt(index) | 0;
@@ -150,6 +140,7 @@ export class StudyCards {
   private queue = Promise.resolve<unknown>(undefined);
   private catalogChangeCount = 0;
   private saving = false;
+  private localSection?: string;
 
   constructor(
     private readonly vault: StudyVault,
@@ -164,7 +155,7 @@ export class StudyCards {
   get sections(): readonly Section[] { return this.catalog.data.sections; }
   get progressRevision() { return this.catalog.revision; }
   get activeSection() {
-    const saved = this.storage.activeSection;
+    const saved = this.localSection ?? this.storage.activeSection;
     return this.sections.find(({ id }) => id === saved)?.id ?? this.sections[0]?.id ?? null;
   }
 
@@ -298,8 +289,39 @@ export class StudyCards {
     return this.enqueue(async () => {
       this.section(id, this.catalog.data);
       await this.storage.openSection(id);
+      this.localSection = undefined;
       this.notify();
     });
+  }
+
+  private selectAfterCommit(id: string) {
+    return this.enqueue(async () => {
+      if (!this.sections.some((section) => section.id === id)) return;
+      try {
+        await this.storage.openSection(id);
+        this.localSection = undefined;
+      } catch {
+        // The shared change already succeeded. Keep this device's selection for the current run.
+        this.localSection = id;
+      }
+      this.notify();
+    });
+  }
+
+  async removeSection(mutation: ProgressMutation, id: string) {
+    const index = this.sections.findIndex((section) => section.id === id);
+    const successor = this.sections[index + 1] ?? this.sections[index - 1];
+    const wasActive = this.activeSection === id;
+    await this.run("removeSection", async () => {
+      const section = this.section(id);
+      for (const result of this.data.freeResults) {
+        if (result.sectionId === id) result.sectionName ??= section.name;
+      }
+      if (this.data.freeSession?.sectionId === id) this.data.freeSession = null;
+      this.data.sections = this.data.sections.filter((section) => section.id !== id);
+      await this.scanIndex(false);
+    }, { mutation });
+    if (successor && wasActive) await this.selectAfterCommit(successor.id);
   }
 
   removeSource(sectionId: string, sourceId: string) {
@@ -315,45 +337,15 @@ export class StudyCards {
     });
   }
 
-  noteQuestions(sectionId: string, path: string) {
-    return this.readNoteQuestions(sectionId, path, this.catalog.data, this.catalog.index);
-  }
-
-  connectedNotes(sectionId: string, sourceId: string) {
-    const { data, index } = this.catalog;
-    const source = this.section(sectionId, data).sources.find(({ id }) => id === sourceId);
-    if (!source) return [];
-    return [...index.values()].filter(({ note, error }) => !error && sourceIncludesNote(source, note))
-      .map(({ note }) => note.path).sort((left, right) => left.localeCompare(right));
-  }
-
-  private readNoteQuestions(sectionId: string, path: string, data: StudyData, index: Map<string, IndexedNote>) {
-    const entry = index.get(path);
-    if (!entry || entry.error || !entry.sections.includes(sectionId)) return;
-    const selection = this.section(sectionId, data).noteSelections?.[path];
-    return {
-      cards: entry.cards.map(({ id, question }) => ({ id, question })),
-      cardIds: selection ? [...selection] : null,
-    };
-  }
-
-  setNoteQuestions(sectionId: string, path: string, { selectedCardIds, expectedCardIds }: {
-    selectedCardIds: readonly string[] | null;
-    expectedCardIds: readonly string[] | null;
-  }) {
-    return this.run("configureNoteQuestions", async () => {
-      const settings = this.readNoteQuestions(sectionId, path, this.data, this.index);
-      if (!settings || JSON.stringify(settings.cardIds) !== JSON.stringify(expectedCardIds)) throw new StaleStudyState();
-      const section = this.section(sectionId);
-      if (selectedCardIds === null) {
-        delete section.noteSelections?.[path];
-        if (section.noteSelections && !Object.keys(section.noteSelections).length) delete section.noteSelections;
-        return;
+  knownQuestions(ids: readonly string[]) {
+    const requested = new Set(ids);
+    const questions = new Map<string, { path: string; question: string }>();
+    for (const [path, { cards }] of Object.entries(this.catalog.data.knownNotes)) {
+      for (const { id, question } of cards) {
+        if (requested.has(id)) questions.set(id, { path, question });
       }
-      const known = new Set([...settings.cards.map(({ id }) => id), ...(settings.cardIds ?? [])]);
-      if (selectedCardIds.some((id) => !known.has(id))) throw new StaleStudyState();
-      (section.noteSelections ??= {})[path] = [...new Set(selectedCardIds)].sort();
-    });
+    }
+    return questions;
   }
 
   private memberships(note: MarkdownNote, data = this.data) {
@@ -528,7 +520,6 @@ export class StudyCards {
         return;
       }
       for (const section of this.data.sections) {
-        moveNoteSelections(section, oldPath, newPath);
         for (const source of section.sources) {
           source.path = remapPath(source.path, oldPath, newPath);
           source.excluded = source.excluded.map((path) => remapPath(path, oldPath, newPath));
@@ -592,9 +583,7 @@ export class StudyCards {
   }
 
   private belongsToSection(card: Card, section: Section, index = this.index) {
-    if (!index.get(card.path)?.sections.includes(section.id)) return false;
-    const selected = section.noteSelections?.[card.path];
-    return selected === undefined || (card.id !== null && selected.includes(card.id));
+    return index.get(card.path)?.sections.includes(section.id) ?? false;
   }
 
   missingSources(sectionId: string) {
@@ -757,6 +746,7 @@ export class StudyCards {
       const result = "retryOf" in selection ? this.data.freeResults.find(({ id }) => id === selection.retryOf) : undefined;
       if ("retryOf" in selection && !result) throw new StaleStudyState();
       const sectionId = "sectionId" in selection ? selection.sectionId : result!.sectionId;
+      const section = this.section(sectionId);
       const cards = this.sectionCards(sectionId, "source").filter(isCheckCard);
       let cardIds: string[];
       if ("order" in selection) {
@@ -769,6 +759,7 @@ export class StudyCards {
         const files = new Set(this.vault.markdownFiles());
         cardIds = cards.filter(({ id, path }) => selected.has(id) && files.has(path)).map(({ id }) => id);
         if (cardIds.length !== selected.size) throw new Error(t("selectedCardsChanged"));
+        section.lastManualSelection = cardIds;
       } else {
         const available = new Set(cards.map(({ id }) => id));
         cardIds = checkScore(result!, available).mistakes;
@@ -835,7 +826,9 @@ export class StudyCards {
       const { position: _position, furthestPosition: _furthest, ...result } = session;
       const available = new Set(this.sectionCards(session.sectionId).filter(isCheckCard).map(({ id }) => id));
       const { graded, unavailable } = checkScore(session, available);
-      if (graded) this.data.freeResults.push({ ...result, finishedAt, ungradedUnavailable: unavailable });
+      if (graded) this.data.freeResults.push({
+        ...result, finishedAt, sectionName: this.section(session.sectionId).name, ungradedUnavailable: unavailable,
+      });
       this.data.freeSession = null;
     }, { mutation });
   }
@@ -911,22 +904,36 @@ export class StudyCards {
         () => this.enroll(this.section(sectionId), sources, rows, getChoice, replaceSourceId)));
   }
 
-  previewFirstSection(requests: SourceRequest[]) {
+  previewNewSection(requests: SourceRequest[]) {
+    const id = this.newId();
     return new EnrollmentPreview(requests.map((request) => ({ ...request })),
       (sources, getChoice, previous, affected) => this.plan(undefined, sources, getChoice, this.catalog.data, previous, affected),
-      (sources, rows, getChoice, name) => this.run("connectSources", async () => {
-        const title = name?.trim();
-        if (!title) throw new Error(t("enterSectionName"));
-        if (this.data.sections.length) throw new StaleStudyState();
-        const section: Section = { id: this.newId(), name: title, sources: [] };
-        return this.enroll(section, sources, rows, getChoice);
-      }));
+      async (sources, rows, getChoice, name) => {
+        const result = await this.run("connectSources", async () => {
+          if (this.data.sections.some((section) => section.id === id)) return { confirmed: true } as const;
+          const title = name?.trim();
+          if (!title) throw new Error(t("enterSectionName"));
+          return this.enroll({ id, name: title, sources: [] }, sources, rows, getChoice);
+        });
+        if (result.confirmed) await this.selectAfterCommit(id);
+        return result;
+      });
   }
 
   private async plan(section: Section | undefined, requests: SourceRequest[], getChoice: PreviewChoice,
     data: StudyData, previous: PlannedRow[] = [], affected?: ReadonlySet<string>) {
     const paths = this.vault.markdownFiles().sort((a, b) => a.localeCompare(b));
     const rows: PlannedRow[] = [];
+    const fileSources = new Map<string, number[]>();
+    const folders: { request: SourceRequest; index: number }[] = [];
+    requests.forEach((request, index) => {
+      if (request.kind === "folder") folders.push({ request, index });
+      else {
+        const matches = fileSources.get(request.path) ?? [];
+        matches.push(index);
+        fileSources.set(request.path, matches);
+      }
+    });
     const changedPaths = affected ? [...affected] : [];
     const cached = new Map<string, PlannedRow[]>();
     for (const row of previous) {
@@ -935,7 +942,8 @@ export class StudyCards {
       else cached.set(row.path, [row]);
     }
     for (const path of paths) {
-      const sources = requests.flatMap((request, index) => includesPath(request, path) ? [index] : []);
+      const sources = [...(fileSources.get(path) ?? []), ...folders.flatMap(({ request, index }) =>
+        includesPath(request, path) ? [index] : [])].sort((left, right) => left - right);
       if (!sources.length) continue;
       const unchanged = cached.get(path);
       if (affected && !changedPaths.some((changed) => hasPath(path, changed)) && unchanged && unchanged.length === sources.length
@@ -943,7 +951,21 @@ export class StudyCards {
         rows.push(...unchanged);
         continue;
       }
-      const note = await this.read(path);
+      let note: MarkdownNote | undefined;
+      try {
+        note = await this.read(path);
+      } catch {
+        for (const source of sources) {
+          const request = requests[source]!;
+          const choice = getChoice(source, path);
+          const previous = unchanged?.find((row) => row.source === source);
+          const checked = choice.checked ?? previous?.checked ?? true;
+          const format = choice.format ?? previous?.format ?? request.format ?? single;
+          rows.push({ path, source, checked, format, formats: [format], needsFormat: false, cards: [], dirty: false,
+            error: t("enrollmentReadFailed"), text: "", excluded: request.kind === "folder" && !checked });
+        }
+        continue;
+      }
       if (!note) continue;
       const items = sources.map((source) => {
         const request = requests[source]!;
@@ -952,7 +974,7 @@ export class StudyCards {
         const choice = getChoice(source, path);
         return {
           source, choice, checked: choice.checked ?? (request.kind === "file" || (note.marked && !existing)),
-          excluded: choice.checked === false || (choice.checked === undefined && Boolean(existing)),
+          excluded: request.kind === "folder" && (choice.checked === false || (choice.checked === undefined && Boolean(existing))),
         };
       });
       const defaults = [
@@ -1020,19 +1042,6 @@ export class StudyCards {
     for (const path of missingFolders()) stale.add(path);
     if (stale.size) return { confirmed: false, paths: [...stale] } as const;
 
-    if (replaced && section.noteSelections && replaced.path !== requests[0]!.path) {
-      const selections = section.noteSelections;
-      for (const [path, ids] of Object.entries(selections)) {
-        if (!includesPath(replaced, path)) continue;
-        const destination = remapPath(path, replaced.path, requests[0]!.path);
-        const row = eligible.get(destination);
-        if (!row || selections[destination] !== undefined) continue;
-        const originalIds = new Set(this.data.knownNotes[path]?.cards.map(({ id }) => id));
-        if (!row.cards.some(({ id }) => id !== null && originalIds.has(id))) continue;
-        selections[destination] = ids;
-        delete selections[path];
-      }
-    }
     requests.forEach((request, index) => {
       const matches = latest.filter(({ source }) => source === index);
       if (request.kind === "file" && !matches.some(({ checked }) => checked)) return;
@@ -1076,19 +1085,26 @@ export class EnrollmentPreview {
 
   replaceSources(sources: readonly SourceRequest[]) {
     const previous = new Map(this.choices);
+    const oldPositions = new Map(this.requests.map(({ kind, path }, index) => [kind + ":" + path, index]));
+    const remapped = new Map<number, number>();
     this.choices.clear();
     for (const [index, source] of sources.entries()) {
-      const oldIndex = this.requests.findIndex(({ kind, path }) => kind === source.kind && path === source.path);
-      const old = this.requests[oldIndex];
+      const oldIndex = oldPositions.get(source.kind + ":" + source.path);
+      if (oldIndex === undefined) continue;
+      const old = this.requests[oldIndex]!;
       const choices = previous.get(oldIndex);
-      if (!old || !choices) continue;
       const changedFormat = !sameFormat(old.format ?? single, source.format ?? single);
+      if (!changedFormat) remapped.set(oldIndex, index);
+      if (!choices) continue;
       this.choices.set(index, changedFormat
         ? new Map([...choices].map(([path, { checked }]) => [path, { checked }]))
         : choices);
     }
     this.requests.splice(0, this.requests.length, ...sources.map((source) => ({ ...source })));
-    this.rows = [];
+    this.rows = this.rows.flatMap((row) => {
+      const source = remapped.get(row.source);
+      return source === undefined ? [] : [{ ...row, source }];
+    });
   }
 
   choose(source: number, path: string, choice: Choice) {

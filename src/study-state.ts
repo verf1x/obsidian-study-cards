@@ -18,7 +18,7 @@ export interface Section {
   id: string;
   name: string;
   sources: Source[];
-  noteSelections?: Record<string, string[]>;
+  lastManualSelection?: string[];
 }
 interface KnownCard { question: string; answerHash: number; id: string }
 export interface KnownNote { format: Format; cards: KnownCard[] }
@@ -64,6 +64,7 @@ export interface FreeSession extends FreeCheck {
 
 export interface FreeResult extends FreeCheck {
   finishedAt: string;
+  sectionName?: string;
   ungradedUnavailable?: number;
 }
 
@@ -100,6 +101,8 @@ function sections(value: unknown): value is Section[] {
       && typeof source.recursive === "boolean" && format(source.format) && stringList(source.excluded))
     && (section.noteSelections === undefined || (record(section.noteSelections)
       && Object.entries(section.noteSelections).every(([path, ids]) => id(path) && stringList(ids) && ids.every(isCardId))))
+    && (section.lastManualSelection === undefined
+      || (stringList(section.lastManualSelection) && section.lastManualSelection.every(isCardId)))
     && distinct(section.sources.map(({ id }) => id))) && distinct(value.map(({ id }) => id));
 }
 
@@ -140,9 +143,25 @@ function freeSession(value: unknown): value is FreeSession {
 
 function freeResult(value: unknown): value is FreeResult {
   if (!record(value) || !isDate(value.finishedAt) || !freeCheck(value)) return false;
+  if (value.sectionName !== undefined && !id(value.sectionName)) return false;
   const graded = Object.keys(value.grades).length;
   return graded > 0 && (value.ungradedUnavailable === undefined || (Number.isInteger(value.ungradedUnavailable)
     && Number(value.ungradedUnavailable) >= 0 && Number(value.ungradedUnavailable) <= value.cardIds.length - graded));
+}
+
+export function hasLegacyMembership(data: StudyData) {
+  return data.sections.some((section) => "noteSelections" in section);
+}
+
+export function migrateMembership(data: StudyData): StudyData {
+  if (!hasLegacyMembership(data)) return data;
+  return {
+    ...data,
+    sections: data.sections.map((section) => {
+      const { noteSelections: _retired, ...current } = section as Section & { noteSelections?: unknown };
+      return current;
+    }),
+  };
 }
 
 export function validStudyData(value: unknown): value is StudyData {
