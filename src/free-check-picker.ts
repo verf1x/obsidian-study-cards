@@ -2,10 +2,11 @@ import type { CheckCard } from "./free-check";
 import { t } from "./localization";
 
 type CardLabel = Pick<CheckCard, "question" | "path">;
+export type ManualSelection = ReadonlyMap<string, CardLabel | undefined>;
 
 export class CardPicker {
   readonly root: HTMLFieldSetElement;
-  private readonly selected = new Map<string, CardLabel | undefined>();
+  private readonly selected: Map<string, CardLabel | undefined>;
   private readonly search: HTMLInputElement;
   private readonly clearButton: HTMLButtonElement;
   private readonly count: HTMLElement;
@@ -13,8 +14,8 @@ export class CardPicker {
   private readonly list: HTMLElement;
 
   constructor(root: HTMLElement, actions: { summary: HTMLElement; buttons: HTMLElement },
-    remembered: readonly string[], labels: ReadonlyMap<string, CardLabel>, private readonly onChange: () => void) {
-    for (const id of remembered) this.selected.set(id, labels.get(id));
+    selection: ManualSelection, private readonly onChange: () => void) {
+    this.selected = new Map(selection);
     this.root = root.createEl("fieldset", { cls: "study-cards-picker", attr: { "aria-label": t("selectCheckCards") } });
     const tools = this.root.createDiv({ cls: "study-cards-picker-tools" });
     this.search = tools.createEl("input", {

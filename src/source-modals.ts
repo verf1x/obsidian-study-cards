@@ -150,7 +150,12 @@ export class SourceEnrollment {
     this.unsubscribe = watch(({ path, oldPath }) => {
       if (oldPath) {
         this.preview.rename(oldPath, path);
-        if (this.connectedFiles.delete(oldPath)) this.connectedFiles.add(path);
+        for (const connected of [...this.connectedFiles]) {
+          const moved = remapPath(connected, oldPath, path);
+          if (moved === connected) continue;
+          this.connectedFiles.delete(connected);
+          this.connectedFiles.add(moved);
+        }
         for (const request of this.requests) request.path = remapPath(request.path, oldPath, path);
         this.pending.add(oldPath);
       }
@@ -210,7 +215,7 @@ export class SourceEnrollment {
         this.excludeCandidates(candidates, previous);
       }
       const selected = this.rows.filter(({ checked }) => checked);
-      const rows = await this.preview.refresh(refreshAll || changed ? undefined : affected);
+      const rows = await this.preview.refresh(refreshAll ? undefined : affected);
       if (this.closed) return;
       const inPaths = ({ path }: PreviewRow) => [...paths].some((changed) => path === changed || path.startsWith(changed + "/"));
       if (paths.size && JSON.stringify(selected.filter(inPaths)) !== JSON.stringify(rows.filter((row) => row.checked && inPaths(row)))) {

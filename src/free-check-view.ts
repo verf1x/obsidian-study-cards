@@ -3,6 +3,7 @@ import { CheckPrompt } from "./free-check-modals";
 import { FreeCheckSetup } from "./free-check-setup";
 import { canAdvance, checkScore, isCheckCard, type CheckCard, type CheckSelection } from "./free-check";
 import { localization, t } from "./localization";
+import { renderPracticeRow } from "./pane-action";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
 import type { FreeGrade, FreeResult, FreeSession, Section } from "./study-state";
@@ -76,11 +77,8 @@ export class FreeCheckView {
       const available = new Set(cards.filter(isCheckCard).map(({ id }) => id));
       const { mistakes } = checkScore(latest, available);
       if (mistakes.some((id) => available.has(id))) {
-        const row = root.createDiv({ cls: "study-cards-practice-row" });
-        const label = row.createDiv();
-        label.createEl("strong", { text: t("latestCheckMistakes") });
-        label.createEl("small", { text: t("sectionCardCount", { count: mistakes.length }) });
-        const retry = row.createEl("button", { text: t("retryMistakes") });
+        const retry = renderPracticeRow(root, t("latestCheckMistakes"), t("sectionCardCount", { count: mistakes.length }),
+          t("retryMistakes"));
         retry.disabled = this.blocked();
         retry.onclick = () => this.retry(latest);
       }
@@ -108,13 +106,12 @@ export class FreeCheckView {
     for (const result of history) {
       const { correct, graded } = checkScore(result, new Set());
       const date = localization.date(result.finishedAt);
-      const row = root.createDiv({ cls: "study-cards-practice-row" });
-      const label = row.createDiv();
-      label.createEl("strong", { text: this.resultSectionName(result) });
-      label.createEl("small", { text: [t("checkHistoryEntry", { check: checkName(result), date }),
-        t("checkHistoryScore", { graded, total: result.cardIds.length, correct })].join(" · ") });
-      row.createEl("button", { text: t("result"), attr: { "aria-label": t("openCheckResult", { name: this.resultSectionName(result), date }) } })
-        .onclick = () => this.showResult(result.id);
+      const name = this.resultSectionName(result);
+      const detail = [t("checkHistoryEntry", { check: checkName(result), date }),
+        t("checkHistoryScore", { graded, total: result.cardIds.length, correct })].join(" · ");
+      const open = renderPracticeRow(root, name, detail, t("result"));
+      open.setAttribute("aria-label", t("openCheckResult", { name, date }));
+      open.onclick = () => this.showResult(result.id);
     }
   }
   renderCardAction(root: HTMLElement, card: Card, sectionId: string, name: string) {
@@ -199,9 +196,10 @@ export class FreeCheckView {
     { focus, start, introductory = false }: { focus: string; start?: CheckCard; introductory?: boolean }) {
     this.replaceCheck((previousId) => {
       const container = this.root.ownerDocument.createElement("div");
-      const remembered = start ? [start.id] : this.study.sections.find(({ id }) => id === sectionId)?.lastManualSelection ?? [];
-      const labels = this.study.knownQuestions(remembered);
-      const form = new FreeCheckSetup(container, { id: sectionId, name }, start, introductory, remembered, labels,
+      const remembered = this.study.sections.find(({ id }) => id === sectionId)?.lastManualSelection ?? [];
+      const labels = start ? undefined : this.study.knownQuestions(remembered);
+      const selection = start ? new Map([[start.id, start]]) : new Map(remembered.map((id) => [id, labels?.get(id)]));
+      const form = new FreeCheckSetup(container, { id: sectionId, name }, start, introductory, selection,
         () => this.study.cards(sectionId, "source").filter(isCheckCard),
         () => {
           this.screen = undefined;

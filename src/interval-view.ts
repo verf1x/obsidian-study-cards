@@ -2,6 +2,7 @@ import { Notice } from "obsidian";
 import { reviewDue } from "./interval-queue";
 import { IntervalSession, type ReviewQuestion } from "./interval-session";
 import { localization, t } from "./localization";
+import { renderPracticeRow } from "./pane-action";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
 import type { IntervalReview, ReviewGrade } from "./study-state";
@@ -46,11 +47,8 @@ export class IntervalView {
     const section = this.study.intervalStatistics(sectionId, now);
     const detail = section.available ? t("availableNow", { count: section.available }) : section.nextDue
       ? t("nextReview", { date: localization.date(section.nextDue) }) : t("noCardsToReview");
-    const row = root.createDiv({ cls: "study-cards-practice-row" });
-    const label = row.createDiv();
-    label.createEl("strong", { text: t("spacedRepetition") });
-    label.createEl("small", { text: detail });
-    const start = row.createEl("button", { text: t("openReviews"), attr: { "data-focus": "interval-start" } });
+    const start = renderPracticeRow(root, t("spacedRepetition"), detail, t("openReviews"));
+    start.dataset.focus = "interval-start";
     start.disabled = this.blocked();
     start.onclick = () => this.perform(async () => {
       const opening = IntervalSession.start(this.study, sectionId);

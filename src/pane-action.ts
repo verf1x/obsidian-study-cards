@@ -10,3 +10,11 @@ export function renderPaneAction(element: HTMLElement, icon: string, title: stri
   const trailing = element.createSpan({ cls: "study-cards-action-chevron", attr: { "aria-hidden": "true" } });
   setIcon(trailing, "chevron-right");
 }
+
+export function renderPracticeRow(parent: HTMLElement, title: string, detail: string, action: string) {
+  const row = parent.createDiv({ cls: "study-cards-practice-row" });
+  const label = row.createDiv();
+  label.createEl("strong", { text: title });
+  label.createEl("small", { text: detail });
+  return row.createEl("button", { text: action });
+}

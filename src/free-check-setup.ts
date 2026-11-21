@@ -1,5 +1,5 @@
 import { checkRange, type CheckCard, type CheckOrder, type CheckSelection } from "./free-check";
-import { CardPicker } from "./free-check-picker";
+import { CardPicker, type ManualSelection } from "./free-check-picker";
 import { t } from "./localization";
 import { message } from "./source-modals";
 
@@ -30,7 +30,7 @@ export class FreeCheckSetup {
 
   constructor(parent: HTMLElement, private readonly section: { id: string; name: string },
     private readonly start: CheckCard | undefined, introductory: boolean,
-    remembered: readonly string[], labels: ReadonlyMap<string, Pick<CheckCard, "question" | "path">>,
+    selection: ManualSelection,
     private readonly getCards: () => readonly CheckCard[],
     close: () => void, private readonly launch: (selection: SetupSelection) => Promise<void>) {
     this.method = introductory ? "random" : "standard";
@@ -71,7 +71,7 @@ export class FreeCheckSetup {
     const actions = footer.createDiv({ cls: "study-cards-setup-actions" });
     const summary = actions.createDiv();
     const buttons = actions.createDiv({ cls: "study-cards-controls study-cards-setup-buttons" });
-    this.picker = new CardPicker(this.root, { summary, buttons }, remembered, labels, () => {
+    this.picker = new CardPicker(this.root, { summary, buttons }, selection, () => {
       this.feedback.textContent = "";
       this.update();
     });

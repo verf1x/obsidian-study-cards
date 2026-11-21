@@ -259,7 +259,7 @@ export class StudyView extends ItemView {
     choices.push({ label: t("deleteSection"), danger: true, action: () => this.perform(
       this.study.removeSection({ id: globalThis.crypto.randomUUID(), revision }, section.id).then(() => {
         this.catalogQuery = "";
-        if (!this.study.activeSection && this.pane !== "history") this.showPractice();
+        if (!this.study.activeSection) this.showPractice();
         else this.showPane(this.pane, "section");
       }),
     ) });

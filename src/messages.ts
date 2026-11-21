@@ -57,6 +57,7 @@ export const messages = {
   folderWithoutNotes: ["There are no Markdown notes in this folder yet", "В папке пока нет Markdown-заметок"],
   missingNote: ["Note not found", "Заметка не найдена"],
   waitingForEditor: ["Waiting for the editor to save", "Ожидает сохранения в редакторе"],
+  enrollmentReadFailed: ["Could not read this note", "Не удалось прочитать заметку"],
   chooseFormatPrompt: ["These sources use different formats. Choose the format for this note.", "Источники задают разные форматы. Выберите формат заметки"],
   chooseFormat: ["Choose a format", "Выберите формат"],
   createCard: ["Create card", "Создать карточку"],

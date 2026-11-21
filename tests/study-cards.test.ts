@@ -18,6 +18,7 @@ async function testVault() {
   const paths = new Set<string>();
   let state: string | null = null;
   let local: unknown;
+  let deviceHook: ((next: unknown) => void) | undefined;
   let persistHook: ((apply: () => void) => void | Promise<void>) | undefined;
   const io: StudyStorageIO = {
     async readShared() { return state; },
@@ -30,7 +31,10 @@ async function testVault() {
       else apply();
     },
     async readDevice() { return structuredClone(local); },
-    async writeDevice(next) { local = structuredClone(next); },
+    async writeDevice(next) {
+      deviceHook?.(next);
+      local = structuredClone(next);
+    },
   };
   let beforeWrite: (() => Promise<void>) | undefined;
   const dirty = new Set<string>();
@@ -68,6 +72,7 @@ async function testVault() {
     replaceShared: (raw: string | null) => { state = raw; },
     deviceState: () => local,
     resetDevice: () => { local = undefined; },
+    beforeDeviceSave: (hook?: typeof deviceHook) => { deviceHook = hook; },
     open: async () => new StudyCards(files, await StudyStorage.open(io, null, randomUUID), randomUUID),
     beforePersist: (hook?: typeof persistHook) => { persistHook = hook; },
     hook: (fn: () => Promise<void>) => { beforeWrite = fn; },
@@ -120,6 +125,60 @@ test("first enrollment previews without writing and connects both formats in one
   assert.deepEqual(study.sections.map(({ name }) => name), ["Interview"]);
   assert.deepEqual(study.cards(study.activeSection!, "source").map(({ question }) => question), ["Cache", "Headers", "ETag"]);
   assert.ok(study.cards(study.activeSection!).every(({ identity }) => identity === "valid"));
+});
+
+test("enrollment refresh reads affected files and an unreadable unchecked note never blocks confirmation", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const unreadable = "Unreadable.md";
+  const good = "Question.md";
+  const added = "Added.md";
+  for (const path of [unreadable, good]) await vault.files.create(path, "# Question\nAnswer\n");
+  vault.unreadable.add(unreadable);
+  const study = await vault.open();
+  const requests = [good, unreadable].map((path) => ({ kind: "file", path }) as const);
+  const preview = study.previewNewSection(requests);
+  preview.choose(1, unreadable, { checked: false });
+  const initial = await preview.refresh();
+  assert.equal(initial.find(({ path }) => path === good)?.cards.length, 1);
+  assert.ok(initial.find(({ path }) => path === unreadable)?.error);
+
+  await vault.files.create(added, "# Added\nAnswer\n");
+  const read = vault.files.read;
+  const readPaths: string[] = [];
+  vault.files.read = (path) => {
+    readPaths.push(path);
+    return read(path);
+  };
+  preview.replaceSources([{ kind: "file", path: added }, ...requests]);
+  preview.choose(0, added, { checked: false });
+  const refreshed = await preview.refresh(new Set([added]));
+  assert.deepEqual(readPaths, [added]);
+  assert.deepEqual(refreshed.filter(({ checked }) => checked).map(({ path }) => path), [good]);
+  assert.deepEqual(await preview.confirm("Good notes"), { confirmed: true });
+  assert.deepEqual(study.cards(study.activeSection!).map(({ path }) => path), [good]);
+});
+
+test("a failed local selection write cannot duplicate a section that enrollment already saved", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = await vault.open();
+  const original = await study.addSection("Existing");
+  const path = "Question.md";
+  await vault.files.create(path, "# Question\nAnswer\n");
+  const preview = study.previewNewSection([{ kind: "file", path }]);
+  await preview.refresh();
+  vault.beforeDeviceSave((value) => {
+    if ((value as { activeSection: string }).activeSection !== original) throw new Error("device checkpoint failed");
+  });
+  assert.deepEqual(await preview.confirm("Connected"), { confirmed: true });
+  const selected = study.activeSection;
+  assert.notEqual(selected, original);
+  assert.deepEqual(study.cards(selected!).map((card) => card.path), [path]);
+  vault.beforeDeviceSave();
+  assert.deepEqual(await preview.confirm("Connected"), { confirmed: true });
+  assert.deepEqual(study.sections.map(({ name }) => name), ["Existing", "Connected"]);
+  assert.equal((await vault.open()).activeSection, selected);
 });
 
 function canonicalSnapshot(value: unknown): unknown {
@@ -1157,5 +1216,50 @@ test("ручной выбор при запуске замечает удале�
   await assert.rejects(study.startFreeCheck(mutation(), resumed.id, { sectionId, cardIds: [first!.id!, second!.id!] }, startedAt),
     /недоступных карточек/);
   assert.equal(study.freeChecks.session?.id, resumed.id);
+  assert.deepEqual(study.sections[0]?.lastManualSelection, [first!.id, second!.id]);
   assert.deepEqual(study.cards(sectionId).map(({ id }) => id), [second!.id]);
+});
+
+test("manual sets transfer per section and survive nonmanual checks, retries and rejected writes", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  let study = await vault.open();
+  const first = await study.addSection("First");
+  const second = await study.addSection("Second");
+  const format = { mode: "single", question: "filename" } as const;
+  for (const [section, filename] of [[first, "Alpha"], [first, "Beta"], [second, "Gamma"]] as const) {
+    await study.createCard(section, filename, "", format, false);
+  }
+  const [alpha, beta] = study.cards(first, "source");
+  const [gamma] = study.cards(second, "source");
+  const mutation = () => ({ id: randomUUID(), revision: study.progressRevision });
+  const now = "2026-11-21T10:00:00Z";
+  const manual = mutation();
+  await study.startFreeCheck(manual, null, { sectionId: first, cardIds: [alpha!.id!] }, now);
+  await study.gradeFreeCheck(mutation(), manual.id, alpha!, "incorrect");
+  await study.finishFreeCheck(mutation(), manual.id, now);
+  const retry = mutation();
+  await study.startFreeCheck(retry, null, { retryOf: manual.id }, now);
+  const random = mutation();
+  await study.startFreeCheck(random, retry.id, { sectionId: first, order: "random", count: 2 }, now);
+  assert.deepEqual(study.sections[0]?.lastManualSelection, [alpha!.id]);
+
+  vault.beforePersist(() => { throw new SharedWriteNotApplied("disk full"); });
+  await assert.rejects(study.startFreeCheck(mutation(), random.id, { sectionId: first, cardIds: [beta!.id!] }, now));
+  assert.deepEqual(study.sections[0]?.lastManualSelection, [alpha!.id]);
+  assert.equal(study.freeChecks.session?.id, random.id);
+  vault.beforePersist();
+  await study.startFreeCheck(mutation(), random.id, { sectionId: second, cardIds: [gamma!.id!] }, now);
+  const expected = [[alpha!.id], [gamma!.id]];
+  assert.deepEqual(study.sections.map(({ lastManualSelection }) => lastManualSelection), expected);
+  const snapshot = await study.exportStudyData();
+
+  vault.resetDevice();
+  study = await vault.open();
+  assert.deepEqual(study.sections.map(({ lastManualSelection }) => lastManualSelection), expected);
+  vault.replaceShared(null);
+  vault.resetDevice();
+  study = await vault.open();
+  await study.importStudyData(await study.previewImport(snapshot));
+  assert.deepEqual(study.sections.map(({ lastManualSelection }) => lastManualSelection), expected);
 });
