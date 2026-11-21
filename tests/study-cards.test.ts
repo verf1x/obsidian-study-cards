@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { IntervalSession } from "../src/interval-session";
 import { StudyCards, type StudyVault } from "../src/study-cards";
 
 import { SharedWriteNotApplied, StudyStorage, type StudyStorageIO } from "../src/study-storage";
@@ -30,10 +31,14 @@ async function testVault() {
   };
   let beforeWrite: (() => Promise<void>) | undefined;
   const dirty = new Set<string>();
+  const unreadable = new Set<string>();
   const files: StudyVault = {
     markdownFiles: () => [...paths],
     folderExists: (path) => existsSync(join(root, path)),
-    read: (path) => readFile(join(root, path), "utf8"),
+    async read(path) {
+      if (unreadable.has(path)) throw new Error("EIO");
+      return readFile(join(root, path), "utf8");
+    },
     async process(path, edit) {
       const hook = beforeWrite;
       beforeWrite = undefined;
@@ -60,6 +65,7 @@ async function testVault() {
     beforePersist: (hook?: typeof persistHook) => { persistHook = hook; },
     hook: (fn: () => Promise<void>) => { beforeWrite = fn; },
     dirty,
+    unreadable,
     edit: (path: string, source: string) => writeFile(join(root, path), source),
     async delete(path: string) {
       await rm(join(root, path));
@@ -77,6 +83,195 @@ async function testVault() {
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
 }
+
+test("интервальная оценка сохраняет минутный срок и возвращает карточку в сессию", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  let study = await vault.open();
+  const section = await study.addSection("Интервалы");
+  await study.createCard(section, "Вопрос", "", { mode: "single", question: "filename" }, false);
+  await study.setStatus(study.cards(section)[0]!, "mastered");
+
+  let now = new Date("2026-11-21T10:00:00.345Z");
+  const clock = () => now;
+  let session = await IntervalSession.start(study, section, clock);
+  const { question } = session.refreshQuestion();
+  assert.ok(question);
+  const intervals = session.intervals(question);
+  assert.equal(intervals.again, 60_000);
+  assert.ok(intervals.good > 10 * 60_000);
+
+  now = new Date("2026-11-21T10:00:05.345Z");
+  await session.grade(question, "again");
+  const waiting = session.refreshQuestion();
+  assert.equal(waiting.question, undefined);
+  assert.equal(waiting.nextDue?.toISOString(), "2026-11-21T10:01:05.345Z");
+
+  study = await vault.open();
+  await study.scan();
+  session = await IntervalSession.start(study, section, clock);
+  assert.equal(session.refreshQuestion().nextDue?.toISOString(), "2026-11-21T10:01:05.345Z");
+  now = new Date("2026-11-21T10:01:05.344Z");
+  assert.equal(session.refreshQuestion().question, undefined);
+  now = new Date("2026-11-21T10:01:05.345Z");
+  const second = session.refreshQuestion().question;
+  assert.equal(second?.card.id, question.card.id);
+  assert.equal(second?.card.status, "mastered");
+  assert.ok(second && session.intervals(second).good < 60 * 60_000);
+});
+
+test("повторная оценка, отмена и статистика учитывают UUID и раздел запуска", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = await vault.open();
+  const first = await study.addSection("Первый раздел");
+  const second = await study.addSection("Второй раздел");
+  const path = await study.createCard(first, "Общий вопрос", "", { mode: "single", question: "filename" }, false);
+  const preview = study.preview(second, [{ kind: "file", path }]);
+  await preview.refresh();
+  await preview.confirm();
+  await study.setStatus(study.cards(first)[0]!, "studied");
+
+  let now = new Date(2026, 10, 21, 23, 57);
+  const clock = () => now;
+  const a = await IntervalSession.start(study, first, clock);
+  const q1 = a.refreshQuestion().question!;
+  vault.beforePersist(() => { throw new SharedWriteNotApplied("disk full"); });
+  await assert.rejects(a.grade(q1, "again"), /Повторите действие/);
+  assert.equal(study.intervalStatistics(first, now).reviews, 0);
+  vault.beforePersist((apply) => { apply(); throw new Error("response lost"); });
+  await Promise.all([a.grade(q1, "again"), a.grade(q1, "again")]);
+  vault.beforePersist();
+  assert.equal(study.intervalStatistics(first, now).reviews, 1);
+  const due = a.refreshQuestion().nextDue!;
+  await study.setSuspended({ id: randomUUID(), revision: study.progressRevision }, study.cards(second)[0]!, true);
+  assert.equal(a.refreshQuestion().nextDue, undefined);
+  assert.equal((await IntervalSession.start(study, second, clock)).refreshQuestion().nextDue, undefined);
+  await study.setSuspended({ id: randomUUID(), revision: study.progressRevision }, study.cards(first)[0]!, false);
+  assert.deepEqual(a.refreshQuestion().nextDue, due);
+
+  now = due;
+  const b = await IntervalSession.start(study, second, clock);
+  const q2 = b.refreshQuestion().question!;
+  const staleQuestion = a.refreshQuestion().question!;
+  const staleUndo = a.refreshQuestion().undo!;
+  assert.equal(q2.card.id, q1.card.id);
+  await b.grade(q2, "again");
+  await assert.rejects(a.grade(staleQuestion, "easy"), /изменились/);
+  await assert.rejects(a.undo(staleUndo), /изменились/);
+  const dayEndsAt = new Date(2026, 10, 22).getTime();
+  assert.deepEqual(study.intervalStatistics(null, now), {
+    available: 0, cards: 1, reviews: 2, nextDue: new Date(now.getTime() + 60_000), dayEndsAt,
+  });
+  assert.equal(study.intervalStatistics(first, now).reviews, 1);
+  assert.equal(study.intervalStatistics(second, now).reviews, 1);
+  assert.equal(a.refreshQuestion().undo, undefined);
+  await b.undo(b.refreshQuestion().undo!);
+  assert.equal(b.refreshQuestion().question?.card.id, q1.card.id);
+  assert.equal(study.intervalStatistics(second, now).reviews, 0);
+  assert.deepEqual(study.intervalStatistics(null, now), { available: 1, cards: 1, reviews: 1, nextDue: undefined, dayEndsAt });
+  assert.equal(a.refreshQuestion().undo?.uuid, q1.card.id);
+
+  const copy = await study.createCard(second, "Общий вопрос", "Копии", { mode: "single", question: "filename" }, false);
+  const copiedCard = study.cards(second).find((card) => card.path === copy)!;
+  assert.notEqual(copiedCard.id, q1.card.id);
+  await study.setStatus(copiedCard, "studied");
+  const copies = await IntervalSession.start(study, second, clock);
+  await copies.grade(copies.refreshQuestion().question!, "easy");
+  const copyQuestion = copies.refreshQuestion().question!;
+  assert.equal(copyQuestion.card.id, copiedCard.id);
+  await copies.grade(copyQuestion, "easy");
+  assert.equal(study.intervalStatistics(null, now).cards, 2);
+
+  now = new Date(2026, 10, 22);
+  const { available, cards, reviews } = study.intervalStatistics(null, now);
+  assert.deepEqual({ available, cards, reviews }, { available: 0, cards: 0, reviews: 0 });
+});
+
+test("сессия фиксирует допуск и ставит короткий наступивший шаг перед остальными повторами", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = await vault.open();
+  const section = await study.addSection("Очередь");
+  const path = "Коллекция.md";
+  const markdown = Array.from({ length: 100 }, (_, index) => `## Вопрос ${index + 1}\n\nОтвет ${index + 1}`).join("\n\n");
+  await vault.files.create(path, markdown);
+  const preview = study.preview(section, [{ kind: "file", path, format: { mode: "collection", level: 2 } }]);
+  await preview.refresh();
+  await preview.confirm();
+  const card = (index: number) => study.cards(section, "source")[index]!;
+  for (let index = 0; index < 10; index++) await study.setStatus(card(index), "studied");
+
+  let now = new Date("2026-11-21T10:00:00.000Z");
+  const clock = () => now;
+  const mutation = () => ({ id: randomUUID(), revision: study.progressRevision });
+  for (const [index, dueAt, scheduleStatus] of [
+    [1, "2026-11-21T09:00:00.000Z", "review"],
+    [2, "2026-11-20T09:00:00.000Z", "review"],
+    [3, "2026-11-21T10:00:30.000Z", "learning"],
+  ] as const) {
+    await study.recordReview(mutation(), card(index), {
+      sectionId: section, sessionId: randomUUID(), at: "2026-11-20T08:00:00.000Z", grade: "good",
+    }, { dueAt, scheduleStatus });
+  }
+  assert.equal(study.intervalStatistics(section, now).available, 9);
+  const session = await IntervalSession.start(study, section, clock);
+  const current = session.refreshQuestion().question!;
+  assert.equal(current.card.id, card(2).id);
+
+  now = new Date("2026-11-21T10:00:30.000Z");
+  assert.equal(session.refreshQuestion().question?.card.id, current.card.id);
+  await session.grade(current, "good");
+  const learning = session.refreshQuestion().question!;
+  assert.equal(learning.card.id, card(3).id);
+  await session.grade(learning, "good");
+  assert.equal(session.refreshQuestion().question?.card.id, card(1).id);
+  await study.setStatus(card(1), "new");
+  assert.equal(session.refreshQuestion().question?.card.id, card(0).id);
+  await study.setStatus(card(10), "studied");
+  for (const index of [0, 4, 5, 6, 7, 8, 9]) await study.setSuspended(mutation(), card(index), true);
+  assert.equal(session.refreshQuestion().question, undefined);
+  assert.equal(session.refreshQuestion().available, 0);
+  assert.equal(study.intervalStatistics(section, now).available, 1);
+  await study.setStatus(card(1), "mastered");
+  assert.equal(session.refreshQuestion().question?.card.id, card(1).id);
+  assert.equal((study.cards(section, "source")[1]!.progress?.schedule as { dueAt: string }).dueAt,
+    "2026-11-21T09:00:00.000Z");
+
+  await vault.delete(path);
+  const empty = session.refreshQuestion();
+  assert.equal(empty.question, undefined);
+  assert.equal(empty.nextDue, undefined);
+  await assert.rejects(session.grade(current, "easy"), /изменились/);
+  await study.delete(path);
+});
+
+test("проверка перед показом пропускает нечитаемый Markdown и подхватывает изменения статуса", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = await vault.open();
+  const section = await study.addSection("Источники повторов");
+  const format = { mode: "single", question: "filename" } as const;
+  const first = await study.createCard(section, "Первый", "", format, false);
+  const second = await study.createCard(section, "Второй", "", format, false);
+  for (const card of study.cards(section)) await study.setStatus(card, "studied");
+  const session = await IntervalSession.start(study, section);
+
+  assert.equal(session.refreshQuestion().question?.card.path, first);
+  vault.unreadable.add(first);
+  await study.recheckIntervalSource(first);
+  assert.equal(session.refreshQuestion().question?.card.path, second);
+  assert.equal(study.intervalStatistics(section, new Date()).available, 1);
+
+  const saved = await vault.files.read(second);
+  await vault.edit(second, saved.replace("qcards/status/studied", "qcards/status/new"));
+  await study.recheckIntervalSource(second);
+  assert.equal(session.refreshQuestion().question, undefined);
+  vault.unreadable.delete(first);
+  const restarted = await IntervalSession.start(study, section);
+  assert.equal(restarted.refreshQuestion().question?.card.path, first);
+  assert.equal(session.refreshQuestion().question?.card.path, first);
+});
 
 test("подключает файл, сохраняет оформление и восстанавливает открытый раздел", async (t) => {
   const vault = await testVault();

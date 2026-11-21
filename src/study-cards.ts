@@ -2,6 +2,7 @@ import type { CardProgress, FreeGrade, FreeSession, IntervalReview, KnownNote, R
 import { StaleStudyState, StudyStorage, type ImportPreview, type StudyMutation } from "./study-storage";
 import { MarkdownNote, sameFormat, single, type Format, type MarkdownCard, type Status } from "./markdown";
 import { canAdvance, checkRange, checkScore, isCheckCard, sampleCards, type CheckSelection } from "./free-check";
+import { isReviewCard, reviewDue, reviewQueue } from "./interval-queue";
 
 export interface StudyVault {
   markdownFiles(): string[];
@@ -15,7 +16,8 @@ export interface StudyVault {
 
 export type { CardProgress, Source, SourceRequest } from "./study-state";
 
-type ProgressMutation = Pick<StudyMutation, "id" | "revision">;
+export type ProgressMutation = Pick<StudyMutation, "id" | "revision">;
+const unreadableNote = "Заметка недоступна для чтения";
 
 interface IndexedNote {
   note: MarkdownNote;
@@ -141,6 +143,7 @@ export class StudyCards {
   }
 
   get sections(): readonly Section[] { return this.catalog.data.sections; }
+  get progressRevision() { return this.catalog.revision; }
   get activeSection() {
     const saved = this.storage.activeSection;
     return this.sections.find(({ id }) => id === saved)?.id ?? this.sections[0]?.id ?? null;
@@ -376,7 +379,17 @@ export class StudyCards {
       this.removeFromIndex(path);
       return;
     }
-    let note = saved ?? await this.read(path);
+    let note: MarkdownNote | undefined;
+    try {
+      note = saved ?? await this.read(path);
+    } catch {
+      const indexed = this.index.get(path);
+      if (indexed && indexed.error !== unreadableNote) {
+        this.index.set(path, { ...indexed, error: unreadableNote });
+        this.catalogChangeCount++;
+      }
+      return;
+    }
     const memberships = note ? this.memberships(path, note) : [];
     if (!note || !memberships.length) {
       this.removeFromIndex(path);
@@ -420,6 +433,22 @@ export class StudyCards {
     return this.run("Обновление заметки", () => this.reconcile(path), { background: true });
   }
 
+  recheckIntervalSource(path: string) {
+    return this.recheckIntervalSources([path]);
+  }
+
+  retryUnreadableIntervalSources(sectionId: string) {
+    const paths = [...this.catalog.index].flatMap(([path, { error, sections }]) =>
+      error === unreadableNote && sections.includes(sectionId) ? [path] : []);
+    if (paths.length) return this.recheckIntervalSources(paths);
+  }
+
+  private recheckIntervalSources(paths: string[]) {
+    return this.run("Проверка источников интервального повторения", async () => {
+      for (const path of paths) await this.reconcile(path, false, undefined, false);
+    }, { background: true });
+  }
+
   refreshSources() {
     return this.enqueue(async () => { this.notify(); });
   }
@@ -458,9 +487,14 @@ export class StudyCards {
   }
 
   private allCards(data = this.data, index = this.index) {
-    const cards = [...index.values()].flatMap((entry) => entry.cards);
     const counts = new Map<string, number>();
-    for (const card of cards) if (card.id) counts.set(card.id, (counts.get(card.id) ?? 0) + 1);
+    const cards: Card[] = [];
+    for (const entry of index.values()) {
+      for (const card of entry.cards) {
+        if (card.id) counts.set(card.id, (counts.get(card.id) ?? 0) + 1);
+        if (!entry.error) cards.push(card);
+      }
+    }
     return cards.map((card): Card => card.id ? {
       ...card,
       identity: counts.get(card.id)! > 1 ? "duplicate" : "valid",
@@ -470,6 +504,14 @@ export class StudyCards {
 
   cards(sectionId: string, order?: "source") {
     return this.sectionCards(sectionId, order, this.catalog.data, this.catalog.index);
+  }
+
+  intervalCards(sectionId: string | null, order?: "source") {
+    if (sectionId !== null && !this.sections.some(({ id }) => id === sectionId)) return [];
+    const { data, index } = this.catalog;
+    const cards = sectionId === null ? this.allCards(data, index) : this.cards(sectionId, order);
+    const files = new Set(this.vault.markdownFiles());
+    return cards.filter(isReviewCard).filter(({ path }) => files.has(path));
   }
 
   private sectionCards(sectionId: string, order?: "source", data = this.data, index = this.index) {
@@ -547,10 +589,13 @@ export class StudyCards {
     return this.run("Интервальная оценка", async () => {
       const id = await this.verifyCard(selected);
       const prior = this.data.progress[id];
-      if (!this.index.get(selected.path)?.sections.includes(review.sectionId) || prior?.suspended) {
+      const current = { ...selected, progress: prior };
+      const due = reviewDue(current);
+      if (!this.index.get(selected.path)?.sections.includes(review.sectionId) || !isReviewCard(current)
+        || (due && due.getTime() > Date.parse(review.at))) {
         throw new StaleStudyState();
       }
-      const order = (this.lastReview(review.sessionId)?.order ?? 0) + 1;
+      const order = (this.lastReview(review.sessionId, this.data)?.review.order ?? 0) + 1;
       this.data.progress[id] = {
         ...prior, schedule,
         reviews: [...(prior?.reviews ?? []), { ...review, id: mutation.id, order, previousSchedule: prior?.schedule }],
@@ -558,24 +603,54 @@ export class StudyCards {
     }, { mutation });
   }
 
-  private lastReview(sessionId: string) {
-    let last: IntervalReview | undefined;
-    for (const { reviews } of Object.values(this.data.progress)) {
+  private lastReview(sessionId: string, data: StudyData) {
+    let last: { uuid: string; review: IntervalReview } | undefined;
+    for (const [uuid, { reviews }] of Object.entries(data.progress)) {
       for (const review of reviews ?? []) {
-        if (review.sessionId === sessionId && (!last || review.order > last.order)) last = review;
+        if (review.sessionId === sessionId && (!last || review.order > last.review.order)) last = { uuid, review };
       }
     }
     return last;
   }
 
+  private reviewToUndo(sessionId: string, data: StudyData) {
+    const last = this.lastReview(sessionId, data);
+    if (!last) return;
+    const progress = data.progress[last.uuid]!;
+    const reviews = progress.reviews;
+    if (reviews?.[reviews.length - 1]?.id === last.review.id) return { ...last, progress, reviews };
+  }
+
+  latestIntervalReview(sessionId: string) {
+    const last = this.reviewToUndo(sessionId, this.catalog.data);
+    if (last) return { uuid: last.uuid, reviewId: last.review.id, revision: this.progressRevision };
+  }
+
+  intervalStatistics(sectionId: string | null, now: Date) {
+    const { ready, nextDue } = reviewQueue(this.intervalCards(sectionId), now);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+    const reviewed = new Set<string>();
+    let reviews = 0;
+    for (const [uuid, progress] of Object.entries(this.catalog.data.progress)) {
+      for (const review of progress.reviews ?? []) {
+        const at = Date.parse(review.at);
+        if ((sectionId === null || sectionId === review.sectionId) && at >= today && at < tomorrow) {
+          reviewed.add(uuid);
+          reviews++;
+        }
+      }
+    }
+    return { available: ready.length, cards: reviewed.size, reviews, nextDue, dayEndsAt: tomorrow };
+  }
+
   undoReview(mutation: ProgressMutation, uuid: string, sessionId: string, reviewId: string) {
     return this.run("Отмена интервальной оценки", async () => {
-      const prior = this.data.progress[uuid];
-      const latest = prior?.reviews?.[prior.reviews.length - 1];
-      if (!prior?.reviews || !latest || latest.id !== reviewId || this.lastReview(sessionId)?.id !== reviewId) {
-        throw new StaleStudyState();
-      }
-      this.data.progress[uuid] = { ...prior, schedule: latest.previousSchedule, reviews: prior.reviews.slice(0, -1) };
+      const last = this.reviewToUndo(sessionId, this.data);
+      if (last?.uuid !== uuid || last.review.id !== reviewId) throw new StaleStudyState();
+      this.data.progress[uuid] = {
+        ...last.progress, schedule: last.review.previousSchedule, reviews: last.reviews.slice(0, -1),
+      };
     }, { mutation });
   }
 
