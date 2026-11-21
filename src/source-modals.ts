@@ -1,4 +1,5 @@
 import { FuzzySuggestModal, Modal, Notice, TFile, TFolder, type App, type TAbstractFile } from "obsidian";
+import { t } from "./localization";
 import { single, type Format } from "./markdown";
 import { remapPath, type EnrollmentPreview, type PreviewRow, type Source, type SourceRequest, type StudyCards } from "./study-cards";
 
@@ -15,7 +16,7 @@ export function sourceRequest(file: TAbstractFile): SourceRequest | undefined {
 }
 
 function pathName(path: string) {
-  return path || "Корень хранилища";
+  return path || t("vaultRoot");
 }
 
 function picker(app: App, kind: SourceRequest["kind"] | undefined, select: (source: SourceRequest) => void) {
@@ -30,29 +31,29 @@ function picker(app: App, kind: SourceRequest["kind"] | undefined, select: (sour
     onChooseItem(item: SourceRequest) { select(item); }
   }
   const modal = new Picker(app);
-  modal.setPlaceholder(kind === "folder" ? "Найти папку" : kind === "file" ? "Найти заметку" : "Найти файл или папку");
+  modal.setPlaceholder(kind === "folder" ? t("findFolder") : kind === "file" ? t("findNote") : t("findFileOrFolder"));
   modal.open();
 }
 
 function formatName(format: Format) {
-  if (format.mode === "collection") return "Коллекция · H" + format.level;
-  return format.question === "filename" ? "Одна карточка · имя файла" : "Одна карточка · первый H1";
+  if (format.mode === "collection") return t("collectionFormat", { level: format.level });
+  return format.question === "filename" ? t("singleByFilename") : t("singleByHeading");
 }
 
 function formatFields(root: HTMLElement, initial: Format, onChange: (format: Format) => void) {
   const row = root.createDiv({ cls: "study-cards-controls" });
-  const mode = row.createEl("label", { text: "Формат " }).createEl("select");
-  mode.createEl("option", { value: "single", text: "Одна карточка" });
-  mode.createEl("option", { value: "collection", text: "Коллекция" });
+  const mode = row.createEl("label", { text: t("sourceFormat") + " " }).createEl("select");
+  mode.createEl("option", { value: "single", text: t("oneCard") });
+  mode.createEl("option", { value: "collection", text: t("collection") });
   mode.value = initial.mode;
-  const levelLabel = row.createEl("label", { text: "Уровень " });
+  const levelLabel = row.createEl("label", { text: t("headingLevel") + " " });
   const level = levelLabel.createEl("select");
   for (let index = 1; index <= 6; index++) level.createEl("option", { value: String(index), text: "H" + index });
   level.value = String(initial.mode === "collection" ? initial.level : 2);
-  const questionLabel = row.createEl("label", { text: "Вопрос из " });
+  const questionLabel = row.createEl("label", { text: t("questionFrom") + " " });
   const question = questionLabel.createEl("select");
-  question.createEl("option", { value: "heading", text: "первого H1" });
-  question.createEl("option", { value: "filename", text: "имени файла" });
+  question.createEl("option", { value: "heading", text: t("firstH1") });
+  question.createEl("option", { value: "filename", text: t("filenameOption") });
   question.value = initial.mode === "single" ? initial.question : "heading";
   const update = () => {
     levelLabel.hidden = mode.value !== "collection";
@@ -78,7 +79,7 @@ export class SelectSourcesModal extends Modal {
   }
 
   onOpen() {
-    this.setTitle(this.replacement ? "Переподключить источник" : this.lockSelection ? "Настроить источник" : "Добавить источники");
+    this.setTitle(this.replacement ? t("reconnectSource") : this.lockSelection ? t("configureSource") : t("addSources"));
     this.contentEl.addClass("study-cards-source-modal");
     this.unsubscribe = this.watch(({ path, oldPath }) => {
       if (!oldPath) return;
@@ -106,7 +107,7 @@ export class SelectSourcesModal extends Modal {
       const headline = item.createDiv({ cls: "study-cards-controls" });
       headline.createEl("strong", { text: pathName(source.path) });
       if (!this.lockSelection && !this.replacement) {
-        const remove = headline.createEl("button", { text: "Убрать", attr: { "aria-label": "Убрать " + pathName(source.path) } });
+        const remove = headline.createEl("button", { text: t("remove"), attr: { "aria-label": t("removeNamedSource", { path: pathName(source.path) }) } });
         remove.onclick = () => {
           this.requests.splice(index, 1);
           this.render();
@@ -115,7 +116,7 @@ export class SelectSourcesModal extends Modal {
       if (source.kind === "folder") {
         const label = item.createEl("label", { cls: "study-cards-source-choice" });
         const check = label.createEl("input", { type: "checkbox" });
-        label.appendText(" Включить подпапки");
+        label.appendText(" " + t("includeSubfolders"));
         check.checked = source.recursive ?? false;
         check.onchange = () => { source.recursive = check.checked; };
       }
@@ -124,7 +125,7 @@ export class SelectSourcesModal extends Modal {
     const actions = this.contentEl.createDiv({ cls: "study-cards-controls" });
     if (!this.lockSelection) {
       const pick = actions.createEl("button", {
-        text: this.replacement ? "Выбрать новый путь" : "Выбрать файл или папку", cls: this.requests.length ? undefined : "mod-cta",
+        text: this.replacement ? t("chooseNewPath") : t("chooseFileOrFolder"), cls: this.requests.length ? undefined : "mod-cta",
       });
       pick.onclick = () => picker(this.app, this.replacement?.kind, (source) => {
         if (this.replacement) this.requests.splice(0, 1, { ...this.replacement, ...source });
@@ -133,12 +134,12 @@ export class SelectSourcesModal extends Modal {
       });
     }
     if (!this.requests.length) return;
-    const next = actions.createEl("button", { text: "Предпросмотр", cls: "mod-cta" });
+    const next = actions.createEl("button", { text: t("preview"), cls: "mod-cta" });
     next.onclick = () => {
       try {
         const preview = this.previousPreview ?? this.study.preview(this.section, this.requests, this.replacement?.id);
         if (this.previousPreview) preview.replaceSources(this.requests);
-        const modal = new PreviewModal(this.app, this.watch, preview, this.lockSelection ? "Сохранить" : "Подключить", () => {
+        const modal = new PreviewModal(this.app, this.watch, preview, this.lockSelection ? t("save") : t("connect"), () => {
           this.previousPreview = preview;
           this.requests.splice(0, this.requests.length, ...preview.sources.map((source) => ({ ...source })));
           this.open();
@@ -170,13 +171,13 @@ class PreviewModal extends Modal {
 
   onOpen() {
     this.openNow = true;
-    this.setTitle("Предпросмотр подключения");
+    this.setTitle(t("enrollmentPreview"));
     this.contentEl.addClass("study-cards-source-modal");
-    this.contentEl.createEl("p", { text: "Study Cards добавит служебные свойства и недостающие UUID. Новые карточки в этих источниках получат UUID автоматически." });
+    this.contentEl.createEl("p", { text: t("enrollmentNotice") });
     this.list = this.contentEl.createDiv({ cls: "study-cards-source-review" });
     this.feedback = this.contentEl.createEl("p", { attr: { role: "status" } });
     const actions = this.contentEl.createDiv({ cls: "study-cards-dialog-actions" });
-    this.backButton = actions.createEl("button", { text: "Назад" });
+    this.backButton = actions.createEl("button", { text: t("back") });
     this.backButton.onclick = () => {
       this.close();
       this.goBack();
@@ -228,7 +229,7 @@ class PreviewModal extends Modal {
         this.close();
         return;
       }
-      this.feedback.textContent = "Заметки изменились. Проверьте список и подтвердите ещё раз: " + result.paths.join(", ");
+      this.feedback.textContent = t("confirmChangedSources", { paths: result.paths.join(", ") });
     } catch (error) {
       this.feedback.textContent = message(error);
     } finally {
@@ -247,7 +248,7 @@ class PreviewModal extends Modal {
       const group = this.list.createDiv({ cls: "study-cards-item" });
       const items = rows.filter((row) => row.source === index);
       if (source.kind === "folder" || !items.length) group.createEl("h4", { text: pathName(source.path) });
-      if (!items.length) group.createEl("p", { text: source.kind === "folder" ? "В папке пока нет Markdown-заметок" : "Заметка не найдена" });
+      if (!items.length) group.createEl("p", { text: source.kind === "folder" ? t("folderWithoutNotes") : t("missingNote") });
       for (const row of items) {
         const item = group.createDiv({ cls: source.kind === "folder" ? "study-cards-item" : undefined });
         const label = item.createEl("label", { cls: "study-cards-source-choice" });
@@ -255,17 +256,17 @@ class PreviewModal extends Modal {
         const check = label.createEl("input", { type: "checkbox", attr: { "data-focus": key } });
         if (focused === key) check.focus();
         check.checked = row.checked;
-        label.appendText(" " + row.path + " · " + row.cards.length);
+        label.appendText(" " + t("previewNoteCount", { path: row.path, count: row.cards.length }));
         check.onchange = () => {
           this.preview.choose(index, row.path, { checked: check.checked });
           this.pending.add(row.path);
           void this.refresh();
         };
-        if (row.dirty) item.createEl("p", { text: "Ожидает сохранения в редакторе" });
+        if (row.dirty) item.createEl("p", { text: t("waitingForEditor") });
         if (row.error) item.createEl("p", { text: row.error });
         if (row.needsFormat) {
-          const select = item.createEl("label", { text: "Источники задают разные форматы. Выберите формат заметки " }).createEl("select");
-          select.createEl("option", { value: "", text: "Выберите формат" }).disabled = true;
+          const select = item.createEl("label", { text: t("chooseFormatPrompt") + " " }).createEl("select");
+          select.createEl("option", { value: "", text: t("chooseFormat") }).disabled = true;
           row.formats.forEach((format, choice) => select.createEl("option", { value: String(choice), text: formatName(format) }));
           select.onchange = () => {
             this.preview.choose(index, row.path, { format: row.formats[Number(select.value)] });
@@ -278,7 +279,7 @@ class PreviewModal extends Modal {
         details.createEl("summary", { text: formatName(row.format) });
         const cards = details.createEl("ul");
         row.cards.forEach(({ question, firstLine, lastLine }) => {
-          cards.createEl("li", { text: firstLine + "–" + lastLine + " · " + question });
+          cards.createEl("li", { text: t("previewQuestionLine", { first: firstLine, last: lastLine, question }) });
         });
       }
     }
@@ -294,17 +295,17 @@ export class CreateCardModal extends Modal {
   }
 
   onOpen() {
-    this.setTitle("Создать карточку");
+    this.setTitle(t("createCard"));
     const root = this.contentEl;
     root.addClass("study-cards-form-modal");
     const form = root.createEl("form", { cls: "study-cards-form" });
-    const name = form.createEl("label", { text: "Имя файла " }).createEl("input", { type: "text" });
+    const name = form.createEl("label", { text: t("fileName") + " " }).createEl("input", { type: "text" });
     name.required = true;
     name.focus();
     let folder = "";
     let format = single;
     const destination = form.createDiv({ cls: "study-cards-controls" });
-    destination.createSpan({ text: "Папка" });
+    destination.createSpan({ text: t("folder") });
     const folderButton = destination.createEl("button", { type: "button", text: pathName(folder) });
     folderButton.onclick = () => picker(this.app, "folder", (item) => {
       folder = item.path;
@@ -314,9 +315,9 @@ export class CreateCardModal extends Modal {
     const label = form.createEl("label");
     const template = label.createEl("input", { type: "checkbox" });
     template.checked = true;
-    label.appendText(" Добавить заготовку вопроса и ответа");
+    label.appendText(" " + t("addCardTemplate"));
     const feedback = form.createEl("p", { attr: { role: "status" } });
-    const submit = form.createEl("button", { text: "Создать и открыть", cls: "mod-cta", type: "submit" });
+    const submit = form.createEl("button", { text: t("createAndOpen"), cls: "mod-cta", type: "submit" });
     form.onsubmit = (event) => {
       event.preventDefault();
       submit.disabled = true;

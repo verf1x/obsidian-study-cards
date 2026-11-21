@@ -1,4 +1,5 @@
 import type { App } from "obsidian";
+import { t } from "./localization";
 import { sharedStudyPath, SharedWriteNotApplied, type StudyStorageIO } from "./study-storage";
 
 const folder = "Study Cards";
@@ -46,13 +47,13 @@ export async function obsidianStudyStorage(app: App, onClose: (close: () => void
               if (!await adapter.exists(folder)) throw error;
             }
           }
-          if (await adapter.exists(sharedStudyPath)) throw new Error("Общий файл Study Cards уже появился.");
+          if (await adapter.exists(sharedStudyPath)) throw new Error(t("sharedFileAppeared"));
           publicationStarted = true;
           await vault.create(sharedStudyPath, next);
           return;
         }
         await adapter.process(sharedStudyPath, (actual) => {
-          if (actual !== expected) throw new Error("Общий файл Study Cards изменился.");
+          if (actual !== expected) throw new Error(t("sharedFileChanged"));
           publicationStarted = true;
           return next;
         });
@@ -72,7 +73,7 @@ export async function obsidianStudyStorage(app: App, onClose: (close: () => void
       return new Promise((resolve, reject) => {
         const transaction = db.transaction(records, "readwrite");
         transaction.oncomplete = () => resolve();
-        transaction.onabort = () => reject(transaction.error ?? new Error("Локальная копия Study Cards не сохранилась."));
+        transaction.onabort = () => reject(transaction.error ?? new Error(t("localCopyWriteFailed")));
         transaction.objectStore(records).put(next, vaultKey);
       });
     },

@@ -1,4 +1,5 @@
 import { Modal, type App } from "obsidian";
+import { t } from "./localization";
 import { message } from "./source-modals";
 import { checkRange, type CheckCard, type CheckSelection } from "./free-check";
 
@@ -13,20 +14,20 @@ export class CheckSetupModal extends Modal {
     private readonly launch: (selection: OrderedSelection) => Promise<void>) { super(app); }
 
   onOpen() {
-    this.setTitle("Настроить свободную проверку");
+    this.setTitle(t("configureFreeCheck"));
     const form = this.contentEl.createEl("form", { cls: "study-cards-form" });
     form.createEl("p", { text: this.section.name });
-    const order = form.createEl("label", { text: "Порядок вопросов " }).createEl("select");
-    order.createEl("option", { value: "standard", text: "Стандартный" });
-    order.createEl("option", { value: "random", text: "Случайный" });
+    const order = form.createEl("label", { text: t("questionOrder") + " " }).createEl("select");
+    order.createEl("option", { value: "standard", text: t("standardOrder") });
+    order.createEl("option", { value: "random", text: t("randomOrder") });
     const first = form.createEl("p");
-    const count = form.createEl("label", { text: "Количество вопросов " }).createEl("input", {
+    const count = form.createEl("label", { text: t("questionCount") + " " }).createEl("input", {
       type: "number", attr: { min: "1", step: "1", required: "" },
     });
     const available = form.createEl("p", { attr: { "aria-live": "polite" } });
     const actions = form.createDiv({ cls: "study-cards-controls" });
-    actions.createEl("button", { text: "Отмена", type: "button" }).onclick = () => this.close();
-    const begin = actions.createEl("button", { text: "Начать проверку", type: "submit", cls: "mod-cta" });
+    actions.createEl("button", { text: t("cancel"), type: "button" }).onclick = () => this.close();
+    const begin = actions.createEl("button", { text: t("startFreeCheck"), type: "submit", cls: "mod-cta" });
     const feedback = form.createEl("p", { attr: { role: "status" } });
     let requested = 20;
     let saving = false;
@@ -38,9 +39,10 @@ export class CheckSetupModal extends Modal {
       count.value = maximum ? String(Math.min(requested, maximum)) : "";
       count.disabled = begin.disabled = saving || maximum === 0;
       order.disabled = saving;
-      first.textContent = random ? "Выборка из всего раздела"
-        : cards[offset] ? "Первый вопрос: " + cards[offset].question : "Стартовая карточка недоступна";
-      available.textContent = "Доступно вопросов: " + maximum;
+      const firstCard = cards[offset];
+      first.textContent = random ? t("wholeSectionSelection")
+        : firstCard ? t("firstQuestion", { question: firstCard.question }) : t("startCardUnavailable");
+      available.textContent = t("questionsAvailable", { count: maximum });
     };
     count.oninput = () => {
       if (Number.isInteger(count.valueAsNumber) && count.valueAsNumber > 0) requested = count.valueAsNumber;
@@ -77,7 +79,7 @@ export class CheckPrompt extends Modal {
     this.setTitle(this.title);
     this.contentEl.createEl("p", { text: this.prompt });
     const actions = this.contentEl.createDiv({ cls: "study-cards-controls" });
-    actions.createEl("button", { text: "Отмена" }).onclick = () => this.close();
+    actions.createEl("button", { text: t("cancel") }).onclick = () => this.close();
     for (const { label, action, primary } of this.choices) {
       actions.createEl("button", { text: label, cls: primary ? "mod-cta" : undefined }).onclick = () => {
         this.close();

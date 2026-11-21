@@ -1,24 +1,14 @@
 import { Notice } from "obsidian";
 import { reviewDue } from "./interval-queue";
 import { IntervalSession, type ReviewQuestion } from "./interval-session";
+import { localization, t } from "./localization";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
 import type { IntervalReview, ReviewGrade } from "./study-state";
 
-const grades: Record<ReviewGrade, { label: string; description: string }> = {
-  again: { label: "Снова", description: "Ответ забыт" },
-  hard: { label: "Трудно", description: "Верный ответ с усилием" },
-  good: { label: "Хорошо", description: "Обычный верный ответ" },
-  easy: { label: "Легко", description: "Уверенный ответ без усилия" },
-};
-
-function formatInterval(ms: number) {
-  const minutes = Math.max(1, Math.round(ms / 60_000));
-  if (minutes < 60) return `${minutes} мин`;
-  const hours = minutes / 60;
-  if (hours < 24) return `${hours.toLocaleString(undefined, { maximumFractionDigits: 1 })} ч`;
-  return `${(hours / 24).toLocaleString(undefined, { maximumFractionDigits: 1 })} дн`;
-}
+const descriptions = {
+  again: "againDescription", hard: "hardDescription", good: "goodDescription", easy: "easyDescription",
+} as const satisfies Record<ReviewGrade, string>;
 
 function sameQuestion(previous: ReviewQuestion | undefined, current: ReviewQuestion) {
   const card = previous?.card;
@@ -54,7 +44,7 @@ export class IntervalView {
   renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
     const now = new Date();
     const block = root.createDiv({ cls: "study-cards-free-actions" });
-    const start = block.createEl("button", { text: "Интервальное повторение", attr: { "data-focus": "interval-start" } });
+    const start = block.createEl("button", { text: t("spacedRepetition"), attr: { "data-focus": "interval-start" } });
     start.disabled = this.blocked();
     start.onclick = () => this.perform(async () => {
       const opening = IntervalSession.start(this.study, sectionId);
@@ -72,7 +62,7 @@ export class IntervalView {
     const all = this.study.intervalStatistics(null, now);
     const totals = block.createEl("details", { attr: { "data-card": "interval-statistics" } });
     totals.open = opened.has("interval-statistics");
-    totals.createEl("summary", { text: "Повторения во всех учебных разделах" });
+    totals.createEl("summary", { text: t("allSectionReviews") });
     this.renderStatistics(totals, all);
     this.updateAt(all.dayEndsAt, all.nextDue);
   }
@@ -80,20 +70,20 @@ export class IntervalView {
   renderCardAction(root: HTMLElement, card: Card) {
     if (card.identity !== "valid" || card.status === "invalid") return;
     const suspended = Boolean(card.progress?.suspended);
-    const button = root.createEl("button", { text: suspended ? "Возобновить повторения" : "Приостановить повторения" });
+    const button = root.createEl("button", { text: suspended ? t("resumeReviews") : t("suspendReviews") });
     button.disabled = this.blocked();
     const revision = this.study.progressRevision;
     button.onclick = () => this.perform(() =>
       this.study.setSuspended({ id: globalThis.crypto.randomUUID(), revision }, card, !suspended));
     const due = reviewDue(card);
-    if (due) root.createSpan({ text: "Срок повторения · " + due.toLocaleString() });
+    if (due) root.createSpan({ text: t("reviewDue", { date: localization.date(due) }) });
   }
 
   renderCardReviews(root: HTMLElement, reviews: readonly IntervalReview[]) {
-    const list = root.createEl("ul", { attr: { "aria-label": "Интервальные оценки" } });
+    const list = root.createEl("ul", { attr: { "aria-label": t("reviewGrades") } });
     for (const { grade, at } of [...reviews].reverse()) {
-      const row = list.createEl("li", { text: grades[grade].label + " · " });
-      row.createEl("time", { text: new Date(at).toLocaleString(), attr: { datetime: at } });
+      const row = list.createEl("li", { text: t(grade) + " · " });
+      row.createEl("time", { text: localization.date(at), attr: { datetime: at } });
     }
   }
 
@@ -113,10 +103,10 @@ export class IntervalView {
     const stats = this.study.intervalStatistics(section.id, new Date());
     this.updateAt(stats.dayEndsAt, nextDue);
 
-    const panel = root.createDiv({ cls: "study-cards-interval-panel", attr: { "aria-label": "Интервальное повторение" } });
+    const panel = root.createDiv({ cls: "study-cards-interval-panel", attr: { "aria-label": t("spacedRepetition") } });
     const header = panel.createDiv({ cls: "study-cards-controls study-cards-interval-header" });
-    header.createEl("strong", { text: "Интервальное повторение · " + section.name });
-    const back = header.createEl("button", { text: "К каталогу" });
+    header.createEl("strong", { text: t("spacedRepetitionSection", { section: section.name }) });
+    const back = header.createEl("button", { text: t("backToCatalog") });
     back.disabled = this.busy;
     back.onclick = () => {
       this.close();
@@ -126,28 +116,28 @@ export class IntervalView {
     this.renderStatistics(panel, { ...stats, available });
 
     const body = panel.createDiv({ cls: "study-cards-interval-body" });
-    const heading = nextDue ? "Ожидание повторения" : "Нет карточек для повторения";
+    const heading = nextDue ? t("waitingForReview") : t("noCardsToReview");
     body.createEl("h2", {
-      text: question?.card.question ?? (check ? "Проверка карточки" : heading),
+      text: question?.card.question ?? (check ? t("checkingCard") : heading),
       cls: "study-cards-interval-question", attr: { tabindex: "-1" },
     });
     if (!candidate && nextDue) body.createEl("p").createEl("time", {
-      text: "Следующий повтор · " + nextDue.toLocaleString(), attr: { datetime: nextDue.toISOString() },
+      text: t("nextReview", { date: localization.date(nextDue) }), attr: { datetime: nextDue.toISOString() },
     });
     const footer = panel.createDiv({ cls: "study-cards-interval-footer" });
     if (check?.state === "failed") {
-      footer.createEl("button", { text: "Проверить ещё раз" }).onclick = () => {
+      footer.createEl("button", { text: t("checkAgain") }).onclick = () => {
         this.checked = undefined;
         this.render();
       };
     }
     if (question) {
       if (this.revealed) {
-        body.createEl("h3", { text: "Ответ", cls: "study-cards-interval-answer", attr: { tabindex: "-1" } });
+        body.createEl("h3", { text: t("answer"), cls: "study-cards-interval-answer", attr: { tabindex: "-1" } });
         void this.renderMarkdown(body.createDiv(), question.card);
         this.renderGrades(footer, session, question);
       } else {
-        const reveal = footer.createEl("button", { text: "Показать ответ", cls: "mod-cta" });
+        const reveal = footer.createEl("button", { text: t("revealAnswer"), cls: "mod-cta" });
         reveal.onclick = () => {
           this.revealed = question;
           this.render();
@@ -156,7 +146,7 @@ export class IntervalView {
       }
     }
     if (undo) {
-      const button = footer.createEl("button", { text: "Отменить последнюю оценку" });
+      const button = footer.createEl("button", { text: t("undoLastGrade") });
       button.disabled = this.blocked();
       button.onclick = () => this.perform(() => session.undo(undo), ".study-cards-interval-question");
     }
@@ -184,20 +174,19 @@ export class IntervalView {
 
   private renderStatistics(root: HTMLElement, { available, cards, reviews }: ReturnType<StudyCards["intervalStatistics"]>) {
     const row = root.createDiv({ cls: "study-cards-controls study-cards-interval-statistics" });
-    row.createSpan({ text: "Доступно сейчас · " + available });
-    row.createSpan({ text: "Карточек повторено сегодня · " + cards });
-    row.createSpan({ text: "Оценок за сегодня · " + reviews });
+    row.createSpan({ text: t("availableNow", { count: available }) });
+    row.createSpan({ text: t("cardsReviewedToday", { count: cards }) });
+    row.createSpan({ text: t("reviewsGradedToday", { count: reviews }) });
   }
 
   private renderGrades(root: HTMLElement, session: IntervalSession, question: ReviewQuestion) {
     const intervals = session.intervals(question);
     const row = root.createDiv({ cls: "study-cards-interval-grades" });
-    for (const grade of Object.keys(grades) as ReviewGrade[]) {
-      const { label, description } = grades[grade];
+    for (const grade of Object.keys(descriptions) as ReviewGrade[]) {
       const button = row.createEl("button", { cls: grade === "good" ? "mod-cta" : undefined,
-        attr: { title: description, "data-interval-grade": grade } });
-      button.createSpan({ text: label });
-      button.createEl("small", { text: formatInterval(intervals[grade]) });
+        attr: { title: t(descriptions[grade]), "data-interval-grade": grade } });
+      button.createSpan({ text: t(grade) });
+      button.createEl("small", { text: localization.interval(intervals[grade]) });
       button.disabled = this.blocked();
       button.onclick = () => this.perform(() => session.grade(question, grade), ".study-cards-interval-question");
     }

@@ -1,6 +1,7 @@
 import { Notice, type App } from "obsidian";
 import { CheckPrompt, CheckSetupModal } from "./free-check-modals";
 import { canAdvance, checkScore, isCheckCard, type CheckCard, type CheckSelection } from "./free-check";
+import { localization, t } from "./localization";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
 import type { FreeGrade, FreeResult, FreeSession } from "./study-state";
@@ -8,10 +9,8 @@ import type { FreeGrade, FreeResult, FreeSession } from "./study-state";
 type Screen = { mode: "check"; id: string } | { mode: "result"; id: string; empty?: FreeResult };
 
 function checkName(check: FreeSession | FreeResult) {
-  return check.retryOf === null ? "Свободная проверка" : "Повтор ошибок";
+  return check.retryOf === null ? t("freeCheck") : t("mistakeRetry");
 }
-
-function coverage(graded: number, total: number) { return `Оценено ${graded} из ${total}`; }
 
 export class FreeCheckView {
   private screen?: Screen;
@@ -27,8 +26,8 @@ export class FreeCheckView {
   renderCatalog(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
     const { session, results } = this.study.freeChecks;
     const actions = root.createDiv({ cls: "study-cards-controls study-cards-free-actions" });
-    if (session) actions.createEl("button", { text: "Продолжить проверку", cls: "mod-cta" }).onclick = () => this.showCheck(session.id);
-    const start = actions.createEl("button", { text: "Свободная проверка", cls: session ? undefined : "mod-cta" });
+    if (session) actions.createEl("button", { text: t("continueFreeCheck"), cls: "mod-cta" }).onclick = () => this.showCheck(session.id);
+    const start = actions.createEl("button", { text: t("freeCheck"), cls: session ? undefined : "mod-cta" });
     start.disabled = this.blocked() || !this.study.cards(sectionId).some(isCheckCard);
     start.onclick = () => this.setup(sectionId, name);
 
@@ -36,19 +35,19 @@ export class FreeCheckView {
     if (!history.length) return;
     const details = root.createEl("details", { cls: "study-cards-item", attr: { "data-card": "check-history" } });
     details.open = opened.has("check-history");
-    details.createEl("summary", { text: "История проверок · " + history.length });
+    details.createEl("summary", { text: t("checkHistoryCount", { count: history.length }) });
     for (const result of history) {
       const { correct, graded } = checkScore(result, new Set());
-      const date = new Date(result.finishedAt).toLocaleString();
+      const date = localization.date(result.finishedAt);
       const row = details.createDiv({ cls: "study-cards-controls" });
-      row.createEl("button", { text: checkName(result) + " · " + date }).onclick = () => this.showResult(result.id);
-      row.createSpan({ text: `${coverage(graded, result.cardIds.length)} · верно ${correct}` });
+      row.createEl("button", { text: t("checkHistoryEntry", { check: checkName(result), date }) }).onclick = () => this.showResult(result.id);
+      row.createSpan({ text: t("checkHistoryScore", { graded, total: result.cardIds.length, correct }) });
     }
   }
 
   renderCardAction(root: HTMLElement, card: Card, sectionId: string, name: string) {
     if (!isCheckCard(card)) return;
-    const start = root.createEl("button", { text: "Начать с этой карточки" });
+    const start = root.createEl("button", { text: t("startFromCard") });
     start.disabled = this.blocked();
     start.onclick = () => this.setup(sectionId, name, card.id);
   }
@@ -104,7 +103,7 @@ export class FreeCheckView {
   }
 
   private sectionName(sectionId: string) {
-    return this.study.sections.find(({ id }) => id === sectionId)?.name ?? "Учебный раздел недоступен";
+    return this.study.sections.find(({ id }) => id === sectionId)?.name ?? t("sectionUnavailable");
   }
 
   private setup(sectionId: string, name: string, start?: string) {
@@ -119,16 +118,17 @@ export class FreeCheckView {
   private replaceCheck(launch: (previousId: string | null) => void) {
     const { session } = this.study.freeChecks;
     if (!session) return launch(null);
-    const summary = coverage(Object.keys(session.grades).length, session.cardIds.length);
-    const prompt = `${this.sectionName(session.sectionId)} · ${summary}. При запуске новой проверки текущий результат не сохранится.`;
-    new CheckPrompt(this.app, "Есть незавершённая проверка", prompt, [
-      { label: "Продолжить текущую", action: () => this.showCheck(session.id), primary: true },
-      { label: "Отказаться и начать новую", action: () => launch(session.id) },
+    const prompt = t("replaceFreeCheck", {
+      section: this.sectionName(session.sectionId), graded: Object.keys(session.grades).length, total: session.cardIds.length,
+    });
+    new CheckPrompt(this.app, t("unfinishedCheckExists"), prompt, [
+      { label: t("resumeCurrentCheck"), action: () => this.showCheck(session.id), primary: true },
+      { label: t("discardAndStart"), action: () => launch(session.id) },
     ]).open();
   }
 
   private async start(previousId: string | null, selection: CheckSelection) {
-    if (this.blocked()) throw new Error("Сейчас данные Study Cards недоступны для записи.");
+    if (this.blocked()) throw new Error(t("currentlyReadOnly"));
     const id = globalThis.crypto.randomUUID();
     const { revision } = this.study.freeChecks;
     this.saving = true;
@@ -155,36 +155,36 @@ export class FreeCheckView {
 
     const panel = root.createDiv({ cls: "study-cards-free-panel", attr: { "aria-label": checkName(session) } });
     const header = panel.createDiv({ cls: "study-cards-controls study-cards-free-header" });
-    header.createEl("strong", { text: checkName(session) + " · " + this.sectionName(session.sectionId) });
-    header.createEl("button", { text: "К каталогу" }).onclick = () => this.catalog();
+    header.createEl("strong", { text: t("checkSectionHeading", { check: checkName(session), section: this.sectionName(session.sectionId) }) });
+    header.createEl("button", { text: t("backToCatalog") }).onclick = () => this.catalog();
     const graded = Object.keys(session.grades).length;
-    panel.createEl("p", { text: `Вопрос ${session.position + 1} из ${session.cardIds.length} · ${coverage(graded, session.cardIds.length)}` });
+    panel.createEl("p", { text: t("checkQuestionProgress", { position: session.position + 1, total: session.cardIds.length, graded }) });
     const body = panel.createDiv({ cls: "study-cards-free-body" });
-    body.createEl("h2", { cls: "study-cards-free-question", text: card?.question ?? "Карточка недоступна",
+    body.createEl("h2", { cls: "study-cards-free-question", text: card?.question ?? t("cardUnavailable"),
       attr: { tabindex: "-1" } });
     if (card && shown) this.renderAnswer(body, card);
-    if (!card) body.createEl("p", { text: "Можно перейти дальше." });
-    if (grade && (!card || !shown)) body.createEl("p", { text: "Оценка: " + (grade === "correct" ? "Верно" : "Ошибка") });
+    if (!card) body.createEl("p", { text: t("canSkipQuestion") });
+    if (grade && (!card || !shown)) body.createEl("p", { text: t("currentGrade", { grade: t(grade) }) });
 
     const footer = panel.createDiv({ cls: "study-cards-free-footer" });
     if (card) this.renderGrading(footer, card, grade, session, revision);
     const navigation = footer.createDiv({ cls: "study-cards-controls" });
-    const back = navigation.createEl("button", { text: "Назад" });
+    const back = navigation.createEl("button", { text: t("back") });
     back.disabled = this.blocked() || session.position === 0;
     back.onclick = () => this.move(session, revision, -1);
     if (session.position + 1 < session.cardIds.length) {
-      const next = navigation.createEl("button", { text: "Далее", cls: "mod-cta" });
+      const next = navigation.createEl("button", { text: t("next"), cls: "mod-cta" });
       next.disabled = this.blocked() || !canAdvance(session, Boolean(card));
       next.onclick = () => this.move(session, revision, 1);
     }
-    const finish = navigation.createEl("button", { text: "Завершить" });
+    const finish = navigation.createEl("button", { text: t("finish") });
     finish.disabled = this.blocked();
     finish.onclick = () => this.confirmFinish(session, revision);
   }
 
   private renderAnswer(body: HTMLElement, card: CheckCard) {
-    body.createEl("h3", { text: "Ответ", cls: "study-cards-free-answer-title", attr: { tabindex: "-1" } });
-    if (this.answer?.updated) body.createEl("p", { text: "Вопрос или ответ обновлён в заметке", attr: { role: "status" } });
+    body.createEl("h3", { text: t("answer"), cls: "study-cards-free-answer-title", attr: { tabindex: "-1" } });
+    if (this.answer?.updated) body.createEl("p", { text: t("answerUpdated"), attr: { role: "status" } });
     const scroll = this.answerScroll;
     void this.renderMarkdown(body.createDiv({ cls: "study-cards-free-answer" }), card).then(() => {
       if (body.isConnected) body.scrollTop = scroll;
@@ -195,15 +195,15 @@ export class FreeCheckView {
   private renderGrading(root: HTMLElement, card: CheckCard, grade: FreeGrade | null, session: FreeSession, revision: string | null) {
     const actions = root.createDiv({ cls: "study-cards-controls study-cards-free-grades" });
     if (!this.revealed.has(card.id)) {
-      actions.createEl("button", { text: "Показать ответ", cls: "mod-cta" }).onclick = () => {
+      actions.createEl("button", { text: t("revealAnswer"), cls: "mod-cta" }).onclick = () => {
         this.revealed.add(card.id);
         this.render();
         this.focus(".study-cards-free-answer-title");
       };
       return;
     }
-    for (const [value, label] of [["correct", "Верно"], ["incorrect", "Ошибка"]] as const) {
-      const button = actions.createEl("button", { text: label, attr: { "aria-pressed": String(grade === value), "data-grade": value } });
+    for (const value of ["correct", "incorrect"] as const) {
+      const button = actions.createEl("button", { text: t(value), attr: { "aria-pressed": String(grade === value), "data-grade": value } });
       button.disabled = this.blocked();
       button.onclick = () => this.perform(
         () => this.study.gradeFreeCheck({ id: globalThis.crypto.randomUUID(), revision }, session.id, card, value),
@@ -219,9 +219,9 @@ export class FreeCheckView {
   private confirmFinish(session: FreeSession, revision: string | null) {
     const graded = Object.keys(session.grades).length;
     const ungraded = session.cardIds.length - graded;
-    const prompt = `${coverage(graded, session.cardIds.length)}. Без оценки: ${ungraded}.`;
-    new CheckPrompt(this.app, "Подтвердить итог?", prompt, [{
-      label: "Подтвердить итог", primary: true, action: () => {
+    const prompt = t("confirmCheckProgress", { graded, total: session.cardIds.length, ungraded });
+    new CheckPrompt(this.app, t("confirmResultPrompt"), prompt, [{
+      label: t("confirmResult"), primary: true, action: () => {
         const finishedAt = new Date().toISOString();
         this.perform(() => this.study.finishFreeCheck({ id: globalThis.crypto.randomUUID(), revision }, session.id, finishedAt),
           () => {
@@ -238,36 +238,35 @@ export class FreeCheckView {
     const cards = new Map(this.study.cards(result.sectionId).filter(isCheckCard).map((card) => [card.id, card]));
     const { correct, graded, mistakes, ungraded, unavailable } = checkScore(result, new Set(cards.keys()));
     const report = root.createDiv({ cls: "study-cards-free-report" });
-    report.createEl("h2", { text: "Итог · " + checkName(result), cls: "study-cards-free-title", attr: { tabindex: "-1" } });
+    report.createEl("h2", { text: t("checkResultHeading", { check: checkName(result) }), cls: "study-cards-free-title", attr: { tabindex: "-1" } });
     report.createEl("p", { text: this.sectionName(result.sectionId) });
     const score = report.createDiv({ cls: "study-cards-free-score" });
-    const percent = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
-    score.createEl("strong", { text: graded ? percent.format(correct / graded) + " верных" : "Нет оценённых ответов" });
-    score.createEl("p", { text: coverage(graded, result.cardIds.length) });
+    score.createEl("strong", { text: graded ? t("percentCorrect", { percent: localization.percent(correct / graded) }) : t("noGradedAnswers") });
+    score.createEl("p", { text: t("gradedCoverage", { graded, total: result.cardIds.length }) });
     const counts = report.createEl("ul");
     for (const [label, count] of [
-      ["Верно", correct], ["Ошибки", mistakes.length],
-      ["Без оценки, доступны", ungraded - unavailable], ["Без оценки, недоступны", unavailable],
-    ]) counts.createEl("li", { text: `${label} · ${count}` });
+      ["correctCount", correct], ["mistakeCount", mistakes.length],
+      ["ungradedAvailableCount", ungraded - unavailable], ["ungradedUnavailableCount", unavailable],
+    ] as const) counts.createEl("li", { text: t(label, { count }) });
 
     if (mistakes.length) {
-      report.createEl("h3", { text: "Вопросы с ошибками" });
+      report.createEl("h3", { text: t("mistakeQuestions") });
       const list = report.createEl("ol");
       for (const id of mistakes) list.createEl("li", {
-        text: cards.get(id)?.question ?? `Карточка недоступна · вопрос ${result.cardIds.indexOf(id) + 1}`,
+        text: cards.get(id)?.question ?? t("numberedUnavailableCard", { position: result.cardIds.indexOf(id) + 1 }),
       });
     }
     const actions = report.createDiv({ cls: "study-cards-controls" });
     if (mistakes.length) {
       const canRetry = mistakes.some((id) => cards.has(id));
-      if (!canRetry) report.createEl("p", { text: "Все вопросы с ошибками недоступны." });
-      const retry = actions.createEl("button", { text: "Повтор ошибок", cls: "mod-cta" });
+      if (!canRetry) report.createEl("p", { text: t("allMistakesUnavailable") });
+      const retry = actions.createEl("button", { text: t("mistakeRetry"), cls: "mod-cta" });
       retry.disabled = this.blocked() || !canRetry;
       retry.onclick = () => this.replaceCheck((previous) => {
         void this.start(previous, { retryOf: result.id }).catch((error) => new Notice(message(error)));
       });
     }
-    actions.createEl("button", { text: "К каталогу" }).onclick = () => this.catalog();
+    actions.createEl("button", { text: t("backToCatalog") }).onclick = () => this.catalog();
   }
 
   private perform(action: () => Promise<void>, after: () => void) {

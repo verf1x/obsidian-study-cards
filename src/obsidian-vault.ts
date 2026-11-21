@@ -1,10 +1,11 @@
 import { MarkdownView, type App } from "obsidian";
+import { t } from "./localization";
 import type { StudyVault } from "./study-cards";
 
 export function studyVault(app: App): StudyVault {
   const fileAt = (path: string) => {
     const file = app.vault.getFileByPath(path);
-    if (!file || file.extension.toLowerCase() !== "md") throw new Error("Заметка не найдена: " + path);
+    if (!file || file.extension.toLowerCase() !== "md") throw new Error(t("missingNoteAt", { path }));
     return file;
   };
 
@@ -15,7 +16,7 @@ export function studyVault(app: App): StudyVault {
     async process(path, edit) {
       const file = fileAt(path);
       await app.vault.process(file, (source) => {
-        if (file.path !== path || app.vault.getFileByPath(path) !== file) throw new Error("Заметка перемещена: " + path);
+        if (file.path !== path || app.vault.getFileByPath(path) !== file) throw new Error(t("movedNote", { path }));
         return edit(source);
       });
     },
@@ -32,7 +33,7 @@ export function studyVault(app: App): StudyVault {
     async trash(path, validate) {
       const file = fileAt(path);
       const source = await app.vault.read(file);
-      if (file.path !== path || app.vault.getFileByPath(path) !== file) throw new Error("Заметка перемещена: " + path);
+      if (file.path !== path || app.vault.getFileByPath(path) !== file) throw new Error(t("movedNote", { path }));
       validate(source);
       await app.vault.trash(file, false);
     },

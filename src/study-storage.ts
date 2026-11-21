@@ -1,3 +1,5 @@
+import { t } from "./localization";
+import { storedAction } from "./snapshot-actions";
 import { emptyStudyData, isDate, legacyStudyData, record, stringList, validStudyData, type StudyData } from "./study-state";
 
 export const sharedStudyPath = "Study Cards/data.json";
@@ -75,12 +77,12 @@ export interface StudyMutation {
 }
 
 export class StaleStudyState extends Error {
-  constructor() { super("Данные Study Cards изменились. Проверьте актуальное состояние и повторите действие."); }
+  constructor() { super(t("staleStudyData")); }
 }
 
 class UnsupportedVersion extends Error {
   constructor(readonly version: number) {
-    super(`Формат Study Cards ${version} не поддерживается. Откройте данные совместимой версией плагина.`);
+    super(t("unsupportedSnapshotVersion", { version: String(version) }));
   }
 }
 
@@ -115,7 +117,7 @@ async function validateSnapshot(value: unknown): Promise<Snapshot> {
       return snapshot;
     }
   }
-  throw new Error("Файл Study Cards повреждён или имеет неизвестный формат.");
+  throw new Error(t("damagedStudyFile"));
 }
 
 async function backup(value: unknown) {
@@ -158,7 +160,7 @@ function latestVersions(snapshots: Snapshot[]) {
 
 function operationFailed(error: unknown) {
   const detail = error instanceof Error ? error.message : String(error);
-  return new Error("Не удалось сохранить данные Study Cards. Повторите действие. " + detail);
+  return new Error(t("saveFailed", { detail }));
 }
 
 export class StudyStorage {
@@ -191,7 +193,7 @@ export class StudyStorage {
     const store = new StudyStorage(io, device, newId);
     if (device.legacy === null && legacy != null) {
       const old = legacyStudyData(legacy);
-      const candidate = old && await store.makeRevision(newId(), "Миграция данных плагина", old.data);
+      const candidate = old && await store.makeRevision(newId(), storedAction("migrateData"), old.data);
       await store.saveDevice({
         ...device, legacy, migration: candidate,
         activeSection: device.activeSection ?? old?.activeSection ?? null,
@@ -248,21 +250,21 @@ export class StudyStorage {
     return this.run(async () => {
       await this.readLatest();
       const snapshot = this.device.head ?? this.device.migration
-        ?? await this.makeRevision(this.newId(), "Пустое состояние", emptyStudyData());
+        ?? await this.makeRevision(this.newId(), storedAction("emptyState"), emptyStudyData());
       return this.exportSnapshot(snapshot);
     });
   }
 
   exportBeforeImport() {
     const snapshot = this.device.beforeImport;
-    if (!snapshot) throw new Error("Копия до импорта отсутствует.");
+    if (!snapshot) throw new Error(t("noBeforeImportBackup"));
     return this.exportSnapshot(snapshot);
   }
 
   previewImport(raw: string) {
     return this.run(async () => {
       const value: unknown = JSON.parse(raw);
-      if (!record(value) || !isDate(value.exportedAt)) throw new Error("Выберите экспортированный снимок Study Cards.");
+      if (!record(value) || !isDate(value.exportedAt)) throw new Error(t("chooseExportedSnapshot"));
       const snapshot = await validateSnapshot(value.snapshot);
       await this.readLatest();
       const current = this.device.head ?? this.device.migration;
@@ -275,7 +277,7 @@ export class StudyStorage {
       this.imports.set(preview, { snapshot, id: this.newId() });
       return preview;
     }).catch((error: unknown) => {
-      if (error instanceof SyntaxError) throw new Error("Файл импорта Study Cards повреждён.");
+      if (error instanceof SyntaxError) throw new Error(t("damagedImport"));
       throw error;
     });
   }
@@ -283,7 +285,7 @@ export class StudyStorage {
   import(preview: ImportPreview) {
     return this.run(async () => {
       const entry = this.imports.get(preview);
-      if (!entry) throw new Error("Откройте предпросмотр импорта.");
+      if (!entry) throw new Error(t("openImportPreview"));
       await this.readLatest();
       if (this.wasCommitted(entry.id)) return;
       this.checkToken(preview.token);
@@ -291,7 +293,7 @@ export class StudyStorage {
       const head = this.device.head ?? this.device.migration;
       const pending = this.device.pending;
       const candidate = pending?.snapshot.id === entry.id ? pending.snapshot
-        : await this.makeRevision(entry.id, "Импорт снимка", entry.snapshot.data, head, [entry.snapshot]);
+        : await this.makeRevision(entry.id, storedAction("importSnapshot"), entry.snapshot.data, head, [entry.snapshot]);
       await this.publish(candidate, head);
     });
   }
@@ -303,7 +305,7 @@ export class StudyStorage {
       const versions = this.availableVersions(this.device);
       const selected = versions.find((item) => item.id === id);
       if (this.current.problem?.kind !== "conflict" || !selected) throw new StaleStudyState();
-      const candidate = await this.makeRevision(this.newId(), "Выбор версии", selected.data, selected, versions);
+      const candidate = await this.makeRevision(this.newId(), storedAction("chooseVersion"), selected.data, selected, versions);
       const uncertain = this.device.uncertain.find(({ snapshot }) => snapshot.id === selected.id);
       await this.publish(candidate, uncertain?.beforeImport ?? null);
     });
@@ -320,7 +322,7 @@ export class StudyStorage {
       const head = this.device.head ?? this.device.migration;
       if (useBackup !== Boolean(head)) throw new StaleStudyState();
       const data = head?.data ?? emptyStudyData();
-      const candidate = await this.makeRevision(this.newId(), head ? "Восстановление копии" : "Создание состояния",
+      const candidate = await this.makeRevision(this.newId(), head ? storedAction("restoreBackup") : storedAction("createState"),
         data, head, this.availableVersions(this.device));
       await this.publish(candidate);
     });
@@ -340,8 +342,8 @@ export class StudyStorage {
   private ensureWritable() {
     const problem = this.current.problem;
     if (problem?.kind === "unsupported") throw new UnsupportedVersion(problem.version);
-    if (problem?.kind === "conflict") throw new Error("Выберите рабочую версию Study Cards перед сохранением.");
-    if (problem?.kind === "recovery") throw new Error("Восстановите данные Study Cards перед сохранением.");
+    if (problem?.kind === "conflict") throw new Error(t("chooseVersionBeforeSaving"));
+    if (problem?.kind === "recovery") throw new Error(t("restoreBeforeSaving"));
   }
 
   private checkToken(token: number) {
@@ -357,7 +359,7 @@ export class StudyStorage {
   private async makeRevision(id: string, action: string, data: StudyData, parent?: Snapshot | null, reviewed: Snapshot[] = []) {
     // Round-trip through JSON so the local copy and the vault contain the same data.
     const normalized: unknown = JSON.parse(JSON.stringify(data));
-    if (!validStudyData(normalized)) throw new Error("Недопустимое состояние Study Cards.");
+    if (!validStudyData(normalized)) throw new Error(t("invalidStudyState"));
     const ancestors = parent ? [...parent.ancestors, parent.id] : [];
     const lineage = new Set(ancestors);
     const superseded = new Set(parent?.superseded);
@@ -425,7 +427,7 @@ export class StudyStorage {
       try {
         incoming = await validateSnapshot(JSON.parse(raw));
         const known = [...this.availableVersions(next), next.pending?.snapshot].find((item) => item?.id === incoming?.id);
-        if (known && known.checksum !== incoming.checksum) throw new Error("Данные версии изменены.");
+        if (known && known.checksum !== incoming.checksum) throw new Error(t("versionDataChanged"));
       } catch (error) {
         incoming = null;
         next = { ...next, known: true, damaged: raw };
