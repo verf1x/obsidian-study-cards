@@ -2,6 +2,8 @@
 
 [Design issue #44](https://github.com/verf1x/obsidian-study-cards/issues/44) · [Implementation issue #48](https://github.com/verf1x/obsidian-study-cards/issues/48)
 
+[Согласованные изменения после #48](00044-ux-follow-up.md)
+
 ## Approved Orca prototype
 
 Use these captures when comparing the layout in Obsidian.
