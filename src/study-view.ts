@@ -89,12 +89,17 @@ export class StudyView extends ItemView {
         if (this.isOpen) this.showPractice();
       },
       onCancel: () => this.showPane("practice", "connect"),
+      onConfirmSettled: () => {
+        if (this.isOpen && this.firstConnection && this.study.activeSection) this.render();
+      },
     }, requests);
     this.firstConnection.open();
   }
 
   protected render() {
     this.interval.clearTimer();
+    const root = this.contentEl;
+    const active = root.ownerDocument.activeElement;
     const connectedDuringEnrollment = this.firstConnection && this.study.activeSection && !this.firstConnection.confirming;
     if (this.firstConnection && !connectedDuringEnrollment) return;
     if (connectedDuringEnrollment) {
@@ -102,13 +107,12 @@ export class StudyView extends ItemView {
       this.firstConnection = undefined;
     }
     if (this.freeCheck.refreshSetup()) return;
-    const root = this.contentEl;
     const previous = root.dataset.studyPane as Pane | undefined;
     if (previous) {
       this.expanded.set(previous, new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card"))));
     }
-    const active = root.ownerDocument.activeElement;
-    const focus = root.contains(active) ? active?.getAttribute("data-focus") : undefined;
+    const hadPaneFocus = root.contains(active);
+    const focus = hadPaneFocus ? active?.getAttribute("data-focus") : undefined;
     const opened = this.expanded.get(this.pane) ?? new Set<string | null>();
     this.resetAnswers();
     root.empty();
@@ -167,8 +171,9 @@ export class StudyView extends ItemView {
     if (this.pane === "notes" && !problem && !saving) {
       renderStudyStorage(this.app, root.createDiv({ cls: "study-cards-data-tools" }), this.study, opened);
     }
-    if (connectedDuringEnrollment) this.focusPaneControl("check-start");
-    else if (focus) this.focusPaneControl(focus);
+    if (connectedDuringEnrollment && hadPaneFocus) {
+      if (!this.focusPaneControl("check-start")) this.focusPaneControl("practice");
+    } else if (focus) this.focusPaneControl(focus);
   }
 
   private renderNavigation(root: HTMLElement, active: Pane) {

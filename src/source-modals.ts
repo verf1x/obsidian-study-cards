@@ -6,7 +6,12 @@ import { remapPath, type EnrollmentPreview, type PreviewRow, type Source, type S
 export type VaultChange = { path: string; oldPath?: string };
 export type WatchVault = (listener: (change: VaultChange) => void) => () => void;
 
-type FirstConnection = { container: HTMLElement; onConnected: () => void; onCancel: () => void };
+type FirstConnection = {
+  container: HTMLElement;
+  onConnected: () => void;
+  onCancel: () => void;
+  onConfirmSettled: () => void;
+};
 
 export function message(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -105,6 +110,8 @@ export class SelectSourcesModal extends Modal {
     if (typeof this.section === "string") {
       this.setTitle(this.replacement ? t("reconnectSource") : this.lockSelection ? t("configureSource") : t("addSources"));
       this.contentEl.addClass("study-cards-source-modal");
+    } else {
+      this.removeUnavailableRequests();
     }
     this.unsubscribe = this.watch((change) => {
       const { path, oldPath } = change;
@@ -118,13 +125,8 @@ export class SelectSourcesModal extends Modal {
           changed = true;
         }
       }
-      if (typeof this.section !== "string" && !this.app.vault.getAbstractFileByPath(path)) {
-        for (let index = this.requests.length - 1; index >= 0; index--) {
-          const request = this.requests[index]!;
-          if (request.path !== path && !request.path.startsWith(path + "/")) continue;
-          this.requests.splice(index, 1);
-          changed = true;
-        }
+      if (typeof this.section !== "string" && (oldPath || !this.app.vault.getAbstractFileByPath(path))) {
+        changed = this.removeUnavailableRequests() || changed;
       }
       if (changed) {
         const restoreFocus = typeof this.section !== "string" && this.section.container.contains(this.section.container.doc.activeElement);
@@ -140,6 +142,16 @@ export class SelectSourcesModal extends Modal {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.refreshNoteChoices = undefined;
+  }
+
+  private removeUnavailableRequests() {
+    const present = this.requests.filter(({ path, kind }) => {
+      const file = path ? this.app.vault.getAbstractFileByPath(path) : this.app.vault.getRoot();
+      return file && sourceRequest(file)?.kind === kind;
+    });
+    if (present.length === this.requests.length) return false;
+    this.requests.splice(0, this.requests.length, ...present);
+    return true;
   }
 
   private render(focus?: "pick" | "preview", currentNote?: string) {
@@ -403,6 +415,7 @@ class PreviewModal extends Modal {
       this.feedback.textContent = message(error);
     } finally {
       this.confirming = this.busy = false;
+      this.first?.onConfirmSettled();
       this.backButton.disabled = false;
       this.refreshAll = true;
       await this.refresh();
