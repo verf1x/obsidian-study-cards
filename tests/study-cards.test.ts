@@ -397,6 +397,14 @@ test("сохраняет индентированный код в ответе �
   assert.equal(study.cards(section)[0]?.answer, code);
   assert.equal(study.cards(section)[0]?.status, "mastered");
   assert.ok((await vault.files.read(path)).includes(code));
+
+  const source = await vault.files.read(path);
+  await vault.edit(path, source.replace(/#qcards\/status\/mastered\n\n+/, ""));
+  await study.update(path);
+  const adjacent = study.cards(section)[0]!;
+  assert.equal(adjacent.answer, code);
+  await study.setStatus(adjacent, "studied");
+  assert.ok((await vault.files.read(path)).includes("#qcards/status/studied\n\n" + code));
 });
 
 test("вставляет свойства перед концом YAML-документа и сохраняет переставленные UUID", async (t) => {
@@ -426,4 +434,28 @@ test("вставляет свойства перед концом YAML-доку�
   assert.equal(b?.id, firstCard.id);
   assert.equal(b.question, "Уточнённый");
   assert.deepEqual(b.progress?.history, [1]);
+});
+
+test("обнаруживает потерю UUID при перестановке и полном переписывании вопроса", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = vault.open();
+  const section = await study.addSection("Темы");
+  const path = await study.createCard(section, "Коллекция", "", { mode: "collection", level: 2 }, false);
+  const props = await vault.files.read(path);
+  await vault.edit(path, props + "## Первый\nОтвет 1\n\n## Второй\nОтвет 2\n\n## Третий\nОтвет 3\n");
+  await study.update(path);
+  const middle = study.cards(section)[1]!;
+  const history = { history: [1] };
+  await study.saveProgress(middle, history);
+  const [, first, second, third] = (await vault.files.read(path)).split(/(?=^## )/m) as [string, string, string, string];
+  await vault.edit(path, props + third + "\n## Переписан\nСовершенно новый текст\n\n" + first);
+  await study.update(path);
+  const card = study.cards(section)[1]!;
+  assert.equal(card.question, "Переписан");
+  assert.equal(card.identity, "missing");
+  assert.equal(card.id, null);
+  await vault.edit(path, props + third + "\n" + second + first);
+  await study.update(path);
+  assert.deepEqual(study.cards(section)[1]?.progress, history);
 });

@@ -346,10 +346,12 @@ export class MarkdownNote {
     const { id, heading, statusLine } = section;
     const from = statusLine?.from ?? id?.to ?? heading.after;
     const tags = statusLine?.match[1]?.split(/[ \t]+/).filter((value) => !statusTag.test(value)) ?? [];
+    const following = this.source.slice(from, section.to);
+    const separator = !statusLine && following && !/^[ \t]*\r?\n/.test(following) ? this.eol : "";
     return apply(this.source, [{
       from,
       to: statusLine?.to ?? from,
-      text: this.insertLine(from, [...tags, "#" + tag].join(" ")),
+      text: this.insertLine(from, [...tags, "#" + tag].join(" ")) + separator,
     }]);
   }
 }

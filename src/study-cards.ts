@@ -125,6 +125,11 @@ function previousIds(cards: MarkdownCard[], known: KnownNote | undefined, format
     }
     lower = anchors.get(index) ?? lower;
   });
+  const unmatched = cards.map((card, index) => ({ card, index })).filter(({ card }) => !card.id && !ids.has(card));
+  if (available.length === 1 && unmatched.length === 1) {
+    const { card, index } = unmatched[0]!;
+    claim(card, index, 0);
+  }
   return ids;
 }
 
