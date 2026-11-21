@@ -8,7 +8,7 @@ For manual installation, download `main.js`, `manifest.json` and `styles.css` fr
 
 Copy all three files into `.obsidian/plugins/study-cards/` in your vault. Enable **Study Cards** in Community plugins, then open it from the ribbon or the command palette.
 
-Create a study section and add Markdown files or folders. The preview shows which notes will be connected and which headings become cards. For an existing note to join an active folder source automatically, set `qcards_source: true` in its properties.
+Choose **Connect notes** to create a study section from Markdown notes or folders. Open a note’s optional preview to check which headings become cards. Manage sources from **Cards**, start or resume checks from **Practice**, and open completed results from **History**. For an existing note to join an active folder source automatically, set `qcards_source: true` in its properties.
 
 ## Platform compatibility
 
@@ -30,7 +30,7 @@ In an existing demo vault, connect `Материалы/Энтропия исто
 
 Study Cards stores shared progress in `Study Cards/data.json` inside the vault. Enable syncing of **Other file types** in Obsidian Sync and include the **Study Cards** folder. The last opened study section and recovery copies are stored on the device. If versions diverge, open the Study Cards tab to choose a version before making further changes.
 
-Expand **Данные Study Cards** in the tab to export a backup or preview and import one. On mobile, the export is saved as a dated JSON file in the vault root. Copy Markdown notes separately. If the import shows a source as **Недоступен**, use **Переподключить** to find it at its new path. Card progress follows the UUID in the note.
+In Obsidian Settings, open **Study Cards** and expand **Advanced · data and snapshots** to export a snapshot or preview and import one. On mobile, the export is saved as a dated JSON file in the vault root. Copy Markdown notes separately. If an imported source is unavailable, use **Reconnect** in **Cards** to find its new path. Card progress follows the UUID in the note.
 
 ## Contributing
 

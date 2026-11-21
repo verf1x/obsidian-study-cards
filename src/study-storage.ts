@@ -1,6 +1,7 @@
 import { t } from "./localization";
 import { storedAction } from "./snapshot-actions";
-import { emptyStudyData, isDate, legacyStudyData, record, stringList, validStudyData, type StudyData } from "./study-state";
+import { emptyStudyData, hasLegacyMembership, isDate, legacyStudyData, migrateMembership, record, stringList,
+  validStudyData, type StudyData } from "./study-state";
 
 export const sharedStudyPath = "Study Cards/data.json";
 const version = 1;
@@ -32,6 +33,7 @@ interface DeviceState {
   pending: PendingWrite | null;
   uncertain: PendingWrite[];
   migration: Snapshot | null;
+  beforeMembershipMigration: Snapshot | null;
   legacy: unknown;
   damaged: string | null;
   beforeImport: Snapshot | null;
@@ -175,16 +177,17 @@ export class StudyStorage {
   static async open(io: StudyStorageIO, legacy: unknown, newId: () => string) {
     const local = await io.readDevice();
     const saved = record(local) ? local : {};
-    const [head, pending, uncertain, migration, beforeImport, branches] = await Promise.all([
+    const [head, pending, uncertain, migration, beforeImport, branches, beforeMembershipMigration] = await Promise.all([
       backup(saved.head), pendingWrite(saved.pending),
       Promise.all((Array.isArray(saved.uncertain) ? saved.uncertain : [saved.uncertain]).map(pendingWrite)),
       backup(saved.migration), backup(saved.beforeImport),
       Promise.all((Array.isArray(saved.branches) ? saved.branches : []).map(backup)),
+      backup(saved.beforeMembershipMigration),
     ]);
     const device: DeviceState = {
       known: saved.known === true || saved.head != null,
       activeSection: typeof saved.activeSection === "string" ? saved.activeSection : null,
-      head, pending, migration, beforeImport,
+      head, pending, migration, beforeImport, beforeMembershipMigration,
       uncertain: uncertain.filter((candidate) => candidate !== null),
       legacy: saved.legacy ?? null,
       damaged: typeof saved.damaged === "string" ? saved.damaged : null,
@@ -294,7 +297,7 @@ export class StudyStorage {
       const pending = this.device.pending;
       const candidate = pending?.snapshot.id === entry.id ? pending.snapshot
         : await this.makeRevision(entry.id, storedAction("importSnapshot"), entry.snapshot.data, head, [entry.snapshot]);
-      await this.publish(candidate, head);
+      await this.publish(candidate, head, entry.snapshot);
     });
   }
 
@@ -307,7 +310,7 @@ export class StudyStorage {
       if (this.current.problem?.kind !== "conflict" || !selected) throw new StaleStudyState();
       const candidate = await this.makeRevision(this.newId(), storedAction("chooseVersion"), selected.data, selected, versions);
       const uncertain = this.device.uncertain.find(({ snapshot }) => snapshot.id === selected.id);
-      await this.publish(candidate, uncertain?.beforeImport ?? null);
+      await this.publish(candidate, uncertain?.beforeImport ?? null, selected);
     });
   }
 
@@ -358,7 +361,7 @@ export class StudyStorage {
 
   private async makeRevision(id: string, action: string, data: StudyData, parent?: Snapshot | null, reviewed: Snapshot[] = []) {
     // Round-trip through JSON so the local copy and the vault contain the same data.
-    const normalized: unknown = JSON.parse(JSON.stringify(data));
+    const normalized: unknown = JSON.parse(JSON.stringify(migrateMembership(data)));
     if (!validStudyData(normalized)) throw new Error(t("invalidStudyState"));
     const ancestors = parent ? [...parent.ancestors, parent.id] : [];
     const lineage = new Set(ancestors);
@@ -440,7 +443,7 @@ export class StudyStorage {
     next = await this.settlePending(next, incoming, raw, interrupted);
     if (incoming) {
       let migration = next.migration;
-      if (migration && JSON.stringify(canonical(migration.data)) === JSON.stringify(canonical(incoming.data))) migration = null;
+      if (migration && JSON.stringify(canonical(migration.data)) === JSON.stringify(canonical(migrateMembership(incoming.data)))) migration = null;
       const available = latestVersions([next.head, ...next.branches, migration, incoming].filter((item) => item !== null));
       next = {
         ...next,
@@ -464,14 +467,19 @@ export class StudyStorage {
     this.raw = raw;
     this.mustVerifyPending = false;
     const head = next.head ?? next.migration;
-    this.current = { revision: head?.id ?? null, token: this.current.token + 1, data: head?.data ?? emptyStudyData(), problem };
+    this.current = {
+      revision: head?.id ?? null, token: this.current.token + 1,
+      data: head ? migrateMembership(head.data) : emptyStudyData(), problem,
+    };
   }
 
-  private async publish(snapshot: Snapshot, beforeImport: Snapshot | null = null) {
+  private async publish(snapshot: Snapshot, beforeImport: Snapshot | null = null, source = this.device.head) {
     const expected = this.raw ?? null;
     const pending = { snapshot, base: await fingerprint(expected), notApplied: false, beforeImport };
     try {
-      await this.saveDevice({ ...this.device, pending });
+      const beforeMembershipMigration = source && hasLegacyMembership(source.data)
+        ? source : this.device.beforeMembershipMigration;
+      await this.saveDevice({ ...this.device, pending, beforeMembershipMigration });
       await this.io.writeShared(expected, serialize(snapshot));
     } catch (error) {
       if (this.device.pending !== pending) throw operationFailed(error);

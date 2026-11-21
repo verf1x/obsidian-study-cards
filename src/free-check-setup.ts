@@ -30,6 +30,7 @@ export class FreeCheckSetup {
 
   constructor(parent: HTMLElement, private readonly section: { id: string; name: string },
     private readonly start: CheckCard | undefined, introductory: boolean,
+    remembered: readonly string[], labels: ReadonlyMap<string, Pick<CheckCard, "question" | "path">>,
     private readonly getCards: () => readonly CheckCard[],
     close: () => void, private readonly launch: (selection: SetupSelection) => Promise<void>) {
     this.method = introductory ? "random" : "standard";
@@ -70,7 +71,7 @@ export class FreeCheckSetup {
     const actions = footer.createDiv({ cls: "study-cards-setup-actions" });
     const summary = actions.createDiv();
     const buttons = actions.createDiv({ cls: "study-cards-controls study-cards-setup-buttons" });
-    this.picker = new CardPicker(this.root, { summary, buttons }, start, () => {
+    this.picker = new CardPicker(this.root, { summary, buttons }, remembered, labels, () => {
       this.feedback.textContent = "";
       this.update();
     });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -64,6 +64,10 @@ async function testVault() {
   };
   return {
     files,
+    shared: () => state,
+    replaceShared: (raw: string | null) => { state = raw; },
+    deviceState: () => local,
+    resetDevice: () => { local = undefined; },
     open: async () => new StudyCards(files, await StudyStorage.open(io, null, randomUUID), randomUUID),
     beforePersist: (hook?: typeof persistHook) => { persistHook = hook; },
     hook: (fn: () => Promise<void>) => { beforeWrite = fn; },
@@ -96,7 +100,7 @@ test("first enrollment previews without writing and connects both formats in one
   await vault.files.create(collection, original);
   await vault.files.create(single, "# ETag\nSecond answer\n");
   const study = await vault.open();
-  const preview = study.previewFirstSection([
+  const preview = study.previewNewSection([
     { kind: "file", path: collection, format: { mode: "collection", level: 2 } },
     { kind: "file", path: single },
   ]);
@@ -118,154 +122,144 @@ test("first enrollment previews without writing and connects both formats in one
   assert.ok(study.cards(study.activeSection!).every(({ identity }) => identity === "valid"));
 });
 
-test("a connected collection keeps its selected questions after reopening", async (t) => {
+function canonicalSnapshot(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalSnapshot);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, field]) => [key, canonicalSnapshot(field)]));
+  }
+  return value;
+}
+
+test("old shared state and snapshots recover full membership from a partial and an empty subset", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
   const path = "Notes/Questions.md";
   await vault.files.create(path, Array.from({ length: 50 }, (_, index) =>
     `## Question ${index + 1}\nAnswer ${index + 1}\n`).join("\n"));
   let study = await vault.open();
-  const section = await study.addSection("Topic");
-  const enrollment = study.preview(section, [{ kind: "file", path, format: { mode: "collection", level: 2 } }]);
-  await enrollment.refresh();
-  assert.deepEqual(await enrollment.confirm(), { confirmed: true });
-  assert.equal(study.cards(section).length, 50);
-
-  const settings = study.noteQuestions(section, path)!;
-  assert.equal(settings.cardIds, null);
-  const selected = settings.cards.slice(0, 12).map(({ id }) => id!);
+  const partial = await study.addSection("Partial");
+  const empty = await study.addSection("Empty");
+  const format = { mode: "collection", level: 2 } as const;
+  for (const [section, requests] of [
+    [partial, [{ kind: "file", path, format }, { kind: "folder", path: "Notes", format }]],
+    [empty, [{ kind: "folder", path: "Notes", format }]],
+  ] satisfies [string, SourceRequest[]][]) {
+    const enrollment = study.preview(section, requests);
+    await enrollment.refresh();
+    assert.deepEqual(await enrollment.confirm(), { confirmed: true });
+  }
+  const ids = study.cards(partial, "source").map(({ id }) => id!);
+  assert.equal(ids.length, 50);
+  for (const card of study.cards(partial, "source").slice(0, 2)) await study.setStatus(card, "studied");
   const markdown = await vault.files.read(path);
-  await study.setNoteQuestions(section, path, { selectedCardIds: selected, expectedCardIds: settings.cardIds });
-  assert.equal(await vault.files.read(path), markdown);
+  const { checksum: _checksum, ...revision } = JSON.parse(vault.shared()!);
+  revision.data.sections[0].noteSelections = { [path]: ids.slice(0, 12) };
+  revision.data.sections[1].noteSelections = { [path]: [] };
+  const checksum = createHash("sha256").update(JSON.stringify(canonicalSnapshot(revision))).digest("hex");
+  const legacy = { ...revision, checksum };
+  const raw = JSON.stringify(legacy);
+  vault.replaceShared(raw);
+  vault.resetDevice();
 
   study = await vault.open();
   await study.scan();
-  assert.deepEqual(study.cards(section, "source").map(({ id }) => id), selected);
-  assert.deepEqual(new Set(study.noteQuestions(section, path)?.cardIds), new Set(selected));
-  assert.equal(study.noteQuestions(section, path)?.cards.length, 50);
-});
-
-test("question selection applies across overlapping sources and study modes within each section", async (t) => {
-  const vault = await testVault();
-  t.after(vault.cleanup);
-  const path = "Notes/Questions.md";
-  const format = { mode: "collection", level: 2 } as const;
-  await vault.files.create(path, "## First\nFirst answer\n\n## Second\nSecond answer\n");
-  const study = await vault.open();
-  const topic = await study.addSection("Topic");
-  const other = await study.addSection("Other");
-  const direct = study.preview(topic, [{ kind: "file", path, format }]);
-  await direct.refresh();
-  assert.deepEqual(await direct.confirm(), { confirmed: true });
-  for (const section of [topic, other]) {
-    const folder = study.preview(section, [{ kind: "folder", path: "Notes", format }]);
-    await folder.refresh();
-    assert.deepEqual(await folder.confirm(), { confirmed: true });
+  for (const section of [partial, empty]) {
+    assert.deepEqual(study.cards(section, "source").map(({ id }) => id), ids);
+    assert.deepEqual(study.intervalCards(section, "source").map(({ id }) => id), ids.slice(0, 2));
   }
-  for (const card of study.cards(topic)) await study.setStatus(card, "studied");
-  const [first, second] = study.cards(topic, "source").map(({ id }) => id!);
-  assert.ok(first && second);
-  await study.setNoteQuestions(topic, path, { selectedCardIds: [first], expectedCardIds: null });
-  assert.deepEqual(study.cards(topic).map(({ id }) => id), [first]);
-  assert.deepEqual(study.cards(other).map(({ id }) => id), [first, second]);
-  assert.deepEqual(study.intervalCards(topic).map(({ id }) => id), [first]);
-  assert.deepEqual(study.intervalCards(null).map(({ id }) => id), [first, second]);
-  await study.setNoteQuestions(other, path, { selectedCardIds: [], expectedCardIds: null });
-  assert.deepEqual(study.intervalCards(null).map(({ id }) => id), [first]);
+  assert.equal(vault.shared(), raw);
+  assert.equal(await vault.files.read(path), markdown);
 
-  const mutation = () => ({ id: randomUUID(), revision: study.progressRevision });
-  const started = mutation();
-  const startedAt = "2026-11-21T10:00:00.000Z";
-  await study.startFreeCheck(started, null, { sectionId: topic, count: 1, order: "standard" }, startedAt);
-  const question = study.freeCheckQuestions()[0]?.card;
-  assert.equal(question?.id, first);
-  assert.ok(question);
-  await study.gradeFreeCheck(mutation(), started.id, question, "correct");
-  await study.setNoteQuestions(topic, path, { selectedCardIds: [], expectedCardIds: [first] });
-  assert.deepEqual(study.cards(topic), []);
-  assert.equal(study.noteQuestions(topic, path)?.cards.length, 2);
-  assert.deepEqual(study.freeCheckQuestions(), [{ id: first, card: null, grade: "correct" }]);
-  await assert.rejects(study.gradeFreeCheck(mutation(), started.id, question, "incorrect"));
-  await study.setNoteQuestions(topic, path, { selectedCardIds: null, expectedCardIds: [] });
-  assert.deepEqual(study.freeCheckQuestions().map(({ card, grade }) => [card?.id, grade]), [[first, "correct"]]);
+  await study.startFreeCheck({ id: randomUUID(), revision: study.progressRevision }, null,
+    { sectionId: empty, order: "standard", count: 50 }, "2026-11-21T10:00:00.000Z");
+  assert.deepEqual(study.freeChecks.session?.cardIds, ids);
+  assert.ok(JSON.parse(vault.shared()!).data.sections.every((section: object) => !("noteSelections" in section)));
+  assert.deepEqual((vault.deviceState() as { beforeMembershipMigration: unknown }).beforeMembershipMigration, legacy);
+
+  const preview = await study.previewImport(JSON.stringify({ exportedAt: revision.savedAt, snapshot: legacy }));
+  await study.importStudyData(preview);
+  assert.deepEqual(study.cards(empty, "source").map(({ id }) => id), ids);
+  assert.deepEqual(study.cards(partial, "source").map(({ id }) => id), ids);
+  assert.equal(await vault.files.read(path), markdown);
 });
 
-test("a selection follows its note and question IDs while keeping review history", async (t) => {
+test("manual selection, progress and history retain their UUIDs when sources move or sections are deleted", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
   const path = "Notes/Questions.md";
   await vault.files.create(path, "## First\nFirst answer\n\n## Second\nSecond answer\n");
-  const study = await vault.open();
+  let study = await vault.open();
+  const earlier = await study.addSection("Earlier");
   const section = await study.addSection("Topic");
-  const preview = study.preview(section, [{ kind: "file", path, format: { mode: "collection", level: 2 } }]);
-  await preview.refresh();
-  assert.deepEqual(await preview.confirm(), { confirmed: true });
+  const next = await study.addSection("Next");
+  const requests: SourceRequest[] = [{ kind: "file", path, format: { mode: "collection", level: 2 } }];
+  for (const id of [earlier, section]) {
+    const preview = study.preview(id, requests);
+    await preview.refresh();
+    assert.deepEqual(await preview.confirm(), { confirmed: true });
+  }
+
   const first = study.cards(section, "source")[0]!;
   await study.setStatus(first, "studied");
-  const review = await IntervalSession.start(study, section, () => new Date("2026-11-21T10:00:00.000Z"));
+  const now = "2026-11-21T10:00:00.000Z";
+  const review = await IntervalSession.start(study, section, () => new Date(now));
   await review.grade(review.refreshQuestion().question!, "good");
   const progress = study.cards(section, "source")[0]!.progress;
   assert.equal(progress?.reviews?.length, 1);
   assert.ok(progress.schedule);
-  await study.setNoteQuestions(section, path, { selectedCardIds: [], expectedCardIds: null });
-  assert.deepEqual(study.intervalCards(section), []);
-  await study.setNoteQuestions(section, path, { selectedCardIds: [first.id!], expectedCardIds: [] });
+  const mutation = () => ({ id: randomUUID(), revision: study.progressRevision });
+  const completed = mutation();
+  await study.startFreeCheck(completed, null, { sectionId: section, cardIds: [first.id!] }, now);
+  await study.gradeFreeCheck(mutation(), completed.id, study.cards(section, "source")[0]!, "incorrect");
+  await study.finishFreeCheck(mutation(), completed.id, now);
 
-  const source = await vault.files.read(path);
-  const firstHeading = source.indexOf("## First");
-  const secondHeading = source.indexOf("## Second");
-  await vault.edit(path, source.slice(0, firstHeading) + source.slice(secondHeading) + "\n"
-    + source.slice(firstHeading, secondHeading).replace("## First", "## Renamed") + "\n## New\nNew answer\n");
-  await study.update(path);
-  assert.deepEqual(study.cards(section).map(({ id, question }) => [id, question]), [[first.id, "Renamed"]]);
   const movedPath = "Moved/Questions.md";
   await vault.move("Notes", "Moved");
   await study.rename("Notes", "Moved");
-  assert.deepEqual(study.cards(section).map(({ id, progress }) => [id, progress]), [[first.id, progress]]);
-  assert.deepEqual(study.noteQuestions(section, movedPath)?.cardIds, [first.id]);
-  await study.setNoteQuestions(section, movedPath, { selectedCardIds: null, expectedCardIds: [first.id!] });
-  await vault.edit(movedPath, await vault.files.read(movedPath) + "\n## Another\nAnother answer\n");
-  await study.update(movedPath);
-  assert.deepEqual(study.cards(section, "source").map(({ question }) => question), ["Second", "Renamed", "New", "Another"]);
-});
+  assert.equal(study.cards(section, "source")[0]!.path, movedPath);
+  assert.deepEqual(study.sections.find(({ id }) => id === section)?.lastManualSelection, [first.id]);
+  const markdown = await vault.files.read(movedPath);
 
-test("reconnecting a missing source keeps each note's own question selection", async (t) => {
-  const vault = await testVault();
-  t.after(vault.cleanup);
-  const oldPath = "Folder/First.md";
-  const otherPath = "Other.md";
-  const movedPath = "First.md";
-  const format = { mode: "collection", level: 2 } as const;
-  await vault.files.create(oldPath, "## First\nFirst answer\n");
-  await vault.files.create(otherPath, "## Other\nOther answer\n\n## Extra\nExtra answer\n");
-  let study = await vault.open();
-  const reconnectToOther = await study.addSection("Reconnect to another note");
-  const reconnectToMoved = await study.addSection("Reconnect to the moved note");
-  async function connect(section: string, kind: SourceRequest["kind"], path: string, replaceSourceId?: string) {
-    const preview = study.preview(section, [{ kind, path, format }], replaceSourceId);
-    await preview.refresh();
-    assert.deepEqual(await preview.confirm(), { confirmed: true });
-  }
-  await connect(reconnectToOther, "file", oldPath);
-  await connect(reconnectToMoved, "folder", "Folder");
-  for (const section of [reconnectToOther, reconnectToMoved]) {
-    await study.setNoteQuestions(section, oldPath, { selectedCardIds: [], expectedCardIds: null });
-  }
-  await connect(reconnectToOther, "file", otherPath);
-  const otherId = study.cards(reconnectToOther, "source")[0]!.id!;
-  await study.setNoteQuestions(reconnectToOther, otherPath, { selectedCardIds: [otherId], expectedCardIds: null });
-  await vault.move("Folder", "Moved");
-  await vault.move("Moved/First.md", movedPath);
+  const stale = mutation();
+  const unfinished = mutation();
+  await study.startFreeCheck(unfinished, null, { sectionId: section, order: "standard", count: 2 }, now);
+  await study.openSection(section);
+  await assert.rejects(study.removeSection(stale, section));
+  assert.equal(study.freeChecks.session?.id, unfinished.id);
+  const beforeDeletion = study.freeChecks.results;
+  await study.removeSection(mutation(), section);
+  assert.equal(study.activeSection, next);
+  assert.strictEqual(study.freeChecks.session === null, true);
+  assert.deepEqual(study.freeChecks.results, beforeDeletion);
+  assert.deepEqual(study.cards(earlier, "source")[0]!.progress, progress);
+  await assert.rejects(study.startFreeCheck(mutation(), null, { retryOf: completed.id }, now));
+
+  await study.removeSection(mutation(), next);
+  assert.equal(study.activeSection, earlier);
+  const newSection = study.previewNewSection([{ ...requests[0]!, path: movedPath }]);
+  await newSection.refresh();
+  assert.deepEqual(await newSection.confirm("Topic"), { confirmed: true });
+  const recreated = study.activeSection!;
+  assert.notEqual(recreated, section);
+  assert.equal(study.sections.find(({ id }) => id === recreated)?.lastManualSelection, undefined);
+
+  const otherCheck = mutation();
+  await study.startFreeCheck(otherCheck, null, { sectionId: earlier, cardIds: [first.id!] }, now);
+  await study.removeSection(mutation(), recreated);
+  assert.deepEqual(study.freeChecks.session?.id, otherCheck.id);
+  await study.removeSection(mutation(), earlier);
+  assert.equal(study.activeSection, null);
+  assert.equal(study.freeChecks.session, null);
+  assert.equal(await vault.files.read(movedPath), markdown);
 
   study = await vault.open();
   await study.scan();
-  await connect(reconnectToOther, "file", otherPath, study.missingSources(reconnectToOther)[0]!.id);
-  await connect(reconnectToMoved, "folder", "", study.missingSources(reconnectToMoved)[0]!.id);
-  assert.deepEqual(study.cards(reconnectToOther).map(({ id }) => id), [otherId]);
-  assert.deepEqual(study.noteQuestions(reconnectToMoved, movedPath)?.cardIds, []);
-  assert.equal(study.cards(reconnectToMoved).some(({ path }) => path === movedPath), false);
+  assert.equal(study.activeSection, null);
+  assert.deepEqual(study.freeChecks.results, beforeDeletion);
+  assert.deepEqual(study.progress.progress[first.id!], progress);
+  assert.deepEqual(study.knownQuestions([first.id!]).get(first.id!), { path: movedPath, question: "First" });
 });
-
 test("интервальная оценка сохраняет минутный срок и возвращает карточку в сессию", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
