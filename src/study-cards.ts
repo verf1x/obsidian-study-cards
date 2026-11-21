@@ -334,19 +334,22 @@ export class StudyCards {
     };
   }
 
-  setNoteQuestions(sectionId: string, path: string, cardIds: readonly string[] | null, previous: readonly string[] | null) {
+  setNoteQuestions(sectionId: string, path: string, { selectedCardIds, expectedCardIds }: {
+    selectedCardIds: readonly string[] | null;
+    expectedCardIds: readonly string[] | null;
+  }) {
     return this.run("configureNoteQuestions", async () => {
       const settings = this.readNoteQuestions(sectionId, path, this.data, this.index);
-      if (!settings || JSON.stringify(settings.cardIds) !== JSON.stringify(previous)) throw new StaleStudyState();
+      if (!settings || JSON.stringify(settings.cardIds) !== JSON.stringify(expectedCardIds)) throw new StaleStudyState();
       const section = this.section(sectionId);
-      if (cardIds === null) {
+      if (selectedCardIds === null) {
         delete section.noteSelections?.[path];
         if (section.noteSelections && !Object.keys(section.noteSelections).length) delete section.noteSelections;
         return;
       }
       const known = new Set([...settings.cards.map(({ id }) => id), ...(settings.cardIds ?? [])]);
-      if (cardIds.some((id) => !known.has(id))) throw new StaleStudyState();
-      (section.noteSelections ??= {})[path] = [...new Set(cardIds)].sort();
+      if (selectedCardIds.some((id) => !known.has(id))) throw new StaleStudyState();
+      (section.noteSelections ??= {})[path] = [...new Set(selectedCardIds)].sort();
     });
   }
 
@@ -979,7 +982,19 @@ export class StudyCards {
     for (const path of missingFolders()) stale.add(path);
     if (stale.size) return { confirmed: false, paths: [...stale] } as const;
 
-    if (replaced) moveNoteSelections(section, replaced.path, requests[0]!.path);
+    if (replaced && section.noteSelections && replaced.path !== requests[0]!.path) {
+      const selections = section.noteSelections;
+      for (const [path, ids] of Object.entries(selections)) {
+        if (!includesPath(replaced, path)) continue;
+        const destination = remapPath(path, replaced.path, requests[0]!.path);
+        const row = eligible.get(destination);
+        if (!row || selections[destination] !== undefined) continue;
+        const originalIds = new Set(this.data.knownNotes[path]?.cards.map(({ id }) => id));
+        if (!row.cards.some(({ id }) => id !== null && originalIds.has(id))) continue;
+        selections[destination] = ids;
+        delete selections[path];
+      }
+    }
     requests.forEach((request, index) => {
       const matches = latest.filter(({ source }) => source === index);
       if (request.kind === "file" && !matches.some(({ checked }) => checked)) return;

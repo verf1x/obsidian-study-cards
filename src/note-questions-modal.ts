@@ -104,7 +104,10 @@ class NoteQuestionsModal extends Modal {
       feedback.empty();
       refresh();
       try {
-        await this.study.setNoteQuestions(this.sectionId, this.file.path, selection === null ? null : [...selection], cardIds);
+        await this.study.setNoteQuestions(this.sectionId, this.file.path, {
+          selectedCardIds: selection === null ? null : [...selection],
+          expectedCardIds: cardIds,
+        });
         this.close();
       } catch (error) {
         feedback.textContent = message(error);

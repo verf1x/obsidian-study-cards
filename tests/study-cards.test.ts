@@ -104,7 +104,7 @@ test("a connected collection keeps its selected questions after reopening", asyn
   assert.equal(settings.cardIds, null);
   const selected = settings.cards.slice(0, 12).map(({ id }) => id!);
   const markdown = await vault.files.read(path);
-  await study.setNoteQuestions(section, path, selected, settings.cardIds);
+  await study.setNoteQuestions(section, path, { selectedCardIds: selected, expectedCardIds: settings.cardIds });
   assert.equal(await vault.files.read(path), markdown);
 
   study = await vault.open();
@@ -134,12 +134,12 @@ test("question selection applies across overlapping sources and study modes with
   for (const card of study.cards(topic)) await study.setStatus(card, "studied");
   const [first, second] = study.cards(topic, "source").map(({ id }) => id!);
   assert.ok(first && second);
-  await study.setNoteQuestions(topic, path, [first], null);
+  await study.setNoteQuestions(topic, path, { selectedCardIds: [first], expectedCardIds: null });
   assert.deepEqual(study.cards(topic).map(({ id }) => id), [first]);
   assert.deepEqual(study.cards(other).map(({ id }) => id), [first, second]);
   assert.deepEqual(study.intervalCards(topic).map(({ id }) => id), [first]);
   assert.deepEqual(study.intervalCards(null).map(({ id }) => id), [first, second]);
-  await study.setNoteQuestions(other, path, [], null);
+  await study.setNoteQuestions(other, path, { selectedCardIds: [], expectedCardIds: null });
   assert.deepEqual(study.intervalCards(null).map(({ id }) => id), [first]);
 
   const mutation = () => ({ id: randomUUID(), revision: study.progressRevision });
@@ -150,12 +150,12 @@ test("question selection applies across overlapping sources and study modes with
   assert.equal(question?.id, first);
   assert.ok(question);
   await study.gradeFreeCheck(mutation(), started.id, question, "correct");
-  await study.setNoteQuestions(topic, path, [], [first]);
+  await study.setNoteQuestions(topic, path, { selectedCardIds: [], expectedCardIds: [first] });
   assert.deepEqual(study.cards(topic), []);
   assert.equal(study.noteQuestions(topic, path)?.cards.length, 2);
   assert.deepEqual(study.freeCheckQuestions(), [{ id: first, card: null, grade: "correct" }]);
   await assert.rejects(study.gradeFreeCheck(mutation(), started.id, question, "incorrect"));
-  await study.setNoteQuestions(topic, path, null, []);
+  await study.setNoteQuestions(topic, path, { selectedCardIds: null, expectedCardIds: [] });
   assert.deepEqual(study.freeCheckQuestions().map(({ card, grade }) => [card?.id, grade]), [[first, "correct"]]);
 });
 
@@ -176,9 +176,9 @@ test("a selection follows its note and question IDs while keeping review history
   const progress = study.cards(section, "source")[0]!.progress;
   assert.equal(progress?.reviews?.length, 1);
   assert.ok(progress.schedule);
-  await study.setNoteQuestions(section, path, [], null);
+  await study.setNoteQuestions(section, path, { selectedCardIds: [], expectedCardIds: null });
   assert.deepEqual(study.intervalCards(section), []);
-  await study.setNoteQuestions(section, path, [first.id!], []);
+  await study.setNoteQuestions(section, path, { selectedCardIds: [first.id!], expectedCardIds: [] });
 
   const source = await vault.files.read(path);
   const firstHeading = source.indexOf("## First");
@@ -192,10 +192,45 @@ test("a selection follows its note and question IDs while keeping review history
   await study.rename("Notes", "Moved");
   assert.deepEqual(study.cards(section).map(({ id, progress }) => [id, progress]), [[first.id, progress]]);
   assert.deepEqual(study.noteQuestions(section, movedPath)?.cardIds, [first.id]);
-  await study.setNoteQuestions(section, movedPath, null, [first.id!]);
+  await study.setNoteQuestions(section, movedPath, { selectedCardIds: null, expectedCardIds: [first.id!] });
   await vault.edit(movedPath, await vault.files.read(movedPath) + "\n## Another\nAnother answer\n");
   await study.update(movedPath);
   assert.deepEqual(study.cards(section, "source").map(({ question }) => question), ["Second", "Renamed", "New", "Another"]);
+});
+
+test("reconnecting a missing source keeps each note's own question selection", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const oldPath = "First.md";
+  const otherPath = "Other.md";
+  const movedPath = "Moved.md";
+  const format = { mode: "collection", level: 2 } as const;
+  await vault.files.create(oldPath, "## First\nFirst answer\n");
+  await vault.files.create(otherPath, "## Other\nOther answer\n\n## Extra\nExtra answer\n");
+  let study = await vault.open();
+  const reconnectToOther = await study.addSection("Reconnect to another note");
+  const reconnectToMoved = await study.addSection("Reconnect to the moved note");
+  async function connect(section: string, path: string, replaceSourceId?: string) {
+    const preview = study.preview(section, [{ kind: "file", path, format }], replaceSourceId);
+    await preview.refresh();
+    assert.deepEqual(await preview.confirm(), { confirmed: true });
+  }
+  for (const section of [reconnectToOther, reconnectToMoved]) {
+    await connect(section, oldPath);
+    await study.setNoteQuestions(section, oldPath, { selectedCardIds: [], expectedCardIds: null });
+  }
+  await connect(reconnectToOther, otherPath);
+  const otherId = study.cards(reconnectToOther, "source")[0]!.id!;
+  await study.setNoteQuestions(reconnectToOther, otherPath, { selectedCardIds: [otherId], expectedCardIds: null });
+  await vault.move(oldPath, movedPath);
+
+  study = await vault.open();
+  await study.scan();
+  await connect(reconnectToOther, otherPath, study.missingSources(reconnectToOther)[0]!.id);
+  await connect(reconnectToMoved, movedPath, study.missingSources(reconnectToMoved)[0]!.id);
+  assert.deepEqual(study.cards(reconnectToOther).map(({ id }) => id), [otherId]);
+  assert.deepEqual(study.noteQuestions(reconnectToMoved, movedPath)?.cardIds, []);
+  assert.deepEqual(study.cards(reconnectToMoved), []);
 });
 
 test("интервальная оценка сохраняет минутный срок и возвращает карточку в сессию", async (t) => {
