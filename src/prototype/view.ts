@@ -104,7 +104,6 @@ export class PrototypeView extends StudyView {
   }
 
   protected renderCatalogActions(toolbar: HTMLElement, actions: CatalogActions) {
-    toolbar.addClass("study-cards-section-controls");
     const more = toolbar.createEl("button", {
       cls: "study-cards-section-menu",
       attr: { "aria-label": "Действия раздела", "aria-haspopup": "menu", "aria-expanded": "false" },
@@ -293,8 +292,7 @@ export class PrototypeView extends StudyView {
 
   private catalog() {
     this.report = this.shownCheck = undefined;
-    this.render();
-    this.focus("catalog");
+    this.showPane("cards", "search");
   }
 
   private focus(name: string) {
@@ -307,7 +305,8 @@ export class PrototypeView extends StudyView {
     const opener = this.contentEl.ownerDocument.activeElement as HTMLElement | null;
     return () => {
       if (opener && this.contentEl.contains(opener)) opener.focus();
-      else this.focus(this.report ? "report" : "catalog");
+      else if (this.report) this.focus("report");
+      else this.focus("search") ?? this.focus("catalog");
     };
   }
 

@@ -25,12 +25,12 @@ export class FreeCheckView {
 
   constructor(private readonly app: App, private readonly study: StudyCards, private readonly root: HTMLElement,
     private readonly render: () => void, private readonly renderMarkdown: (root: HTMLElement, card: Card) => Promise<void>,
-    private readonly backToPractice: () => void) {}
+    private readonly backToPractice: () => void, private readonly onCheckStarted: (sectionId: string) => void) {}
 
   close() { this.screen = undefined; }
 
   renderPractice(root: HTMLElement, sectionId: string, name: string, introductory: boolean,
-    openNotes: () => void, onFirstLaunch: () => void) {
+    openNotes: () => void) {
     const { session } = this.study.freeChecks;
     const cards = this.study.cards(sectionId);
     const actions = root.createDiv({ cls: "study-cards-practice-row" });
@@ -44,7 +44,7 @@ export class FreeCheckView {
     });
     const eligible = cards.some(isCheckCard);
     start.disabled = this.blocked() || !eligible;
-    start.onclick = () => this.setup(sectionId, name, { focus: "check-start", introductory, onLaunch: onFirstLaunch });
+    start.onclick = () => this.setup(sectionId, name, { focus: "check-start", introductory });
     if (!eligible) {
       actions.createEl("p", { text: t(cards.length ? "sectionWithoutEligibleCards" : "sectionWithoutCards") });
       actions.createEl("button", { text: t("notes") }).onclick = openNotes;
@@ -153,7 +153,7 @@ export class FreeCheckView {
   }
 
   private setup(sectionId: string, name: string,
-    { focus, start, introductory = false, onLaunch }: { focus: string; start?: CheckCard; introductory?: boolean; onLaunch?: () => void }) {
+    { focus, start, introductory = false }: { focus: string; start?: CheckCard; introductory?: boolean }) {
     this.replaceCheck((previousId) => {
       const container = this.root.ownerDocument.createElement("div");
       const form = new FreeCheckSetup(container, { id: sectionId, name }, start, introductory,
@@ -163,10 +163,7 @@ export class FreeCheckView {
           this.render();
           this.focus(`[data-focus="${CSS.escape(focus)}"]`);
         },
-        async (selection) => {
-          await this.start(previousId, selection);
-          onLaunch?.();
-        });
+        (selection) => this.start(previousId, selection));
       this.screen = { mode: "setup", form };
       this.render();
       form.focus();
@@ -198,6 +195,7 @@ export class FreeCheckView {
       throw error;
     }
     this.saving = false;
+    if ("sectionId" in selection) this.onCheckStarted(selection.sectionId);
     this.showCheck(id);
   }
 

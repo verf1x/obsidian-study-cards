@@ -20,6 +20,7 @@ export interface CatalogActions {
 
 const panes = ["practice", "cards", "notes"] as const;
 type Pane = typeof panes[number];
+const firstCheckSections = new WeakMap<StudyCards, string>();
 
 export class StudyView extends ItemView {
   private unsubscribe?: () => void;
@@ -28,14 +29,15 @@ export class StudyView extends ItemView {
   private readonly freeCheck: FreeCheckView;
   private readonly interval: IntervalView;
   private pane: Pane = "practice";
-  private firstCheckSection?: string;
   private readonly expanded = new Map<Pane, Set<string | null>>();
 
   constructor(leaf: WorkspaceLeaf, protected readonly study: StudyCards, private readonly watch: WatchVault,
     protected readonly openNote: (path: string) => Promise<void>) {
     super(leaf);
     this.freeCheck = new FreeCheckView(this.app, study, this.contentEl, () => { if (this.isOpen) this.render(); },
-      (root, card) => this.renderMarkdown(root, card), () => this.showPractice());
+      (root, card) => this.renderMarkdown(root, card), () => this.showPractice(), (sectionId) => {
+        if (firstCheckSections.get(this.study) === sectionId) firstCheckSections.delete(this.study);
+      });
     this.interval = new IntervalView(study, this.contentEl, () => { if (this.isOpen) this.render(); },
       (root, card) => this.renderMarkdown(root, card));
   }
@@ -62,7 +64,8 @@ export class StudyView extends ItemView {
   connectNotes(requests: SourceRequest[] = []) {
     const target = this.study.activeSection ?? {
       onConnected: () => {
-        this.firstCheckSection = this.study.activeSection ?? undefined;
+        const section = this.study.activeSection;
+        if (section) firstCheckSections.set(this.study, section);
         if (this.isOpen) this.showPractice();
       },
     };
@@ -139,22 +142,25 @@ export class StudyView extends ItemView {
     }
   }
 
-  private showPane(pane: Pane, focus: string = pane) {
+  protected showPane(pane: Pane, focus: string = pane) {
     this.pane = pane;
     this.render();
-    this.focusPaneControl(focus);
+    if (!this.focusPaneControl(focus) && focus !== pane) this.focusPaneControl(pane);
   }
 
   private showPractice() {
     this.pane = "practice";
     this.render();
-    this.contentEl.querySelector<HTMLElement>(
+    const next = this.contentEl.querySelector<HTMLElement>(
       '[data-focus="check-continue"], [data-focus="check-start"]:not(:disabled), [data-focus="connect"]:not(:disabled)',
-    )?.focus({ preventScroll: true });
+    ) ?? this.contentEl.querySelector<HTMLElement>('[data-focus="practice"]');
+    next?.focus({ preventScroll: true });
   }
 
   private focusPaneControl(key: string) {
-    this.contentEl.querySelector<HTMLElement>(`[data-focus="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+    const target = this.contentEl.querySelector<HTMLElement>(`[data-focus="${CSS.escape(key)}"]`);
+    target?.focus({ preventScroll: true });
+    return target;
   }
 
   private renderSources(root: HTMLElement, section: Section, actions: CatalogActions) {
@@ -178,7 +184,8 @@ export class StudyView extends ItemView {
           new SelectSourcesModal(this.app, this.study, this.watch, section.id, [], false, source).open();
       } else {
         const folder = source.kind === "folder";
-        if (!folder) row.createEl("button", { text: t("openNote") }).onclick = () => this.perform(this.openNote(source.path));
+        if (!folder) row.createEl("button", { text: t("openNote"), attr: { "aria-label": t("openNoteNamed", { path }) } })
+          .onclick = () => this.perform(this.openNote(source.path));
         row.createEl("button", {
           text: t(folder ? "configureQuestions" : "configure"),
           attr: { "aria-label": t("configureQuestionsFrom", { path }) },
@@ -196,10 +203,8 @@ export class StudyView extends ItemView {
 
   protected renderSectionActions(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
     const practice = root.createDiv({ cls: "study-cards-practice" });
-    this.freeCheck.renderPractice(practice, sectionId, name, this.firstCheckSection === sectionId,
-      () => this.showPane("notes", "add-sources"), () => {
-        if (this.firstCheckSection === sectionId) this.firstCheckSection = undefined;
-      });
+    this.freeCheck.renderPractice(practice, sectionId, name, firstCheckSections.get(this.study) === sectionId,
+      () => this.showPane("notes", "add-sources"));
     this.freeCheck.renderHistory(practice, sectionId, opened);
     const study = practice.createDiv({ cls: "study-cards-practice-row" });
     study.createEl("button", { text: t("study") }).onclick = () => this.showPane("cards", "cards-heading");

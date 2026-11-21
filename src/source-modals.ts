@@ -184,7 +184,7 @@ class PreviewModal extends Modal {
   private backButton!: HTMLButtonElement;
   private name?: HTMLInputElement;
   private total?: HTMLElement;
-  private rows: PreviewRow[] = [];
+  private rows?: PreviewRow[];
   private eligible = false;
   private pending = new Set<string>();
   private sourceChanged = false;
@@ -257,7 +257,7 @@ class PreviewModal extends Modal {
     try {
       const rows = await this.preview.refresh(paths);
       if (this.openNow) {
-        if (this.first && sourceChanged && paths && this.rows.length) {
+        if (this.first && sourceChanged && paths && this.rows) {
           const previous = this.rows.filter(({ checked }) => checked);
           const current = rows.filter(({ checked }) => checked);
           if (JSON.stringify(previous) !== JSON.stringify(current)) {
