@@ -207,7 +207,7 @@ export class StudyView extends ItemView {
   }
 
   private focusPaneControl(key: string) {
-    const target = this.contentEl.querySelector<HTMLElement>(`[data-focus="${CSS.escape(key)}"]`);
+    const target = this.contentEl.querySelector<HTMLElement>(`[data-focus="${CSS.escape(key)}"]:not(:disabled)`);
     target?.focus({ preventScroll: true });
     return target;
   }
