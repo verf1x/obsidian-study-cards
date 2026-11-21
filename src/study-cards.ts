@@ -62,6 +62,20 @@ function includesPath(source: SourceRequest, path: string) {
     : source.recursive ? hasPath(directory(path), source.path) : directory(path) === source.path;
 }
 
+function sourceIncludesNote(source: Source, note: MarkdownNote) {
+  return includesPath(source, note.path) && (source.kind === "file" || (note.marked && !source.excluded.includes(note.path)));
+}
+
+function moveNoteSelections(section: Section, oldPath: string, newPath: string) {
+  const selections = section.noteSelections;
+  if (!selections || oldPath === newPath) return;
+  for (const [path, ids] of Object.entries(selections)) {
+    if (!hasPath(path, oldPath)) continue;
+    delete selections[path];
+    selections[remapPath(path, oldPath, newPath)] = ids;
+  }
+}
+
 function answerHash(answer: string) {
   let hash = 0;
   for (let index = 0; index < answer.length; index++) hash = Math.imul(hash, 31) + answer.charCodeAt(index) | 0;
@@ -298,9 +312,47 @@ export class StudyCards {
     });
   }
 
-  private memberships(path: string, note: MarkdownNote, data = this.data) {
+  noteQuestions(sectionId: string, path: string) {
+    return this.readNoteQuestions(sectionId, path, this.catalog.data, this.catalog.index);
+  }
+
+  connectedNotes(sectionId: string, sourceId: string) {
+    const { data, index } = this.catalog;
+    const source = this.section(sectionId, data).sources.find(({ id }) => id === sourceId);
+    if (!source) return [];
+    return [...index.values()].filter(({ note, error }) => !error && sourceIncludesNote(source, note))
+      .map(({ note }) => note.path).sort((left, right) => left.localeCompare(right));
+  }
+
+  private readNoteQuestions(sectionId: string, path: string, data: StudyData, index: Map<string, IndexedNote>) {
+    const entry = index.get(path);
+    if (!entry || entry.error || !entry.sections.includes(sectionId)) return;
+    const selection = this.section(sectionId, data).noteSelections?.[path];
+    return {
+      cards: entry.cards.map(({ id, question }) => ({ id, question })),
+      cardIds: selection ? [...selection] : null,
+    };
+  }
+
+  setNoteQuestions(sectionId: string, path: string, cardIds: readonly string[] | null, previous: readonly string[] | null) {
+    return this.run("configureNoteQuestions", async () => {
+      const settings = this.readNoteQuestions(sectionId, path, this.data, this.index);
+      if (!settings || JSON.stringify(settings.cardIds) !== JSON.stringify(previous)) throw new StaleStudyState();
+      const section = this.section(sectionId);
+      if (cardIds === null) {
+        delete section.noteSelections?.[path];
+        if (section.noteSelections && !Object.keys(section.noteSelections).length) delete section.noteSelections;
+        return;
+      }
+      const known = new Set([...settings.cards.map(({ id }) => id), ...(settings.cardIds ?? [])]);
+      if (cardIds.some((id) => !known.has(id))) throw new StaleStudyState();
+      (section.noteSelections ??= {})[path] = [...new Set(cardIds)].sort();
+    });
+  }
+
+  private memberships(note: MarkdownNote, data = this.data) {
     return data.sections.flatMap((section) => section.sources.flatMap((source) =>
-      includesPath(source, path) && (source.kind === "file" || (note.marked && !source.excluded.includes(path)))
+      sourceIncludesNote(source, note)
         ? [{ section: section.id, source }] : []));
   }
 
@@ -392,7 +444,7 @@ export class StudyCards {
       }
       return;
     }
-    const memberships = note ? this.memberships(path, note) : [];
+    const memberships = note ? this.memberships(note) : [];
     if (!note || !memberships.length) {
       this.removeFromIndex(path);
       return;
@@ -470,6 +522,7 @@ export class StudyCards {
         return;
       }
       for (const section of this.data.sections) {
+        moveNoteSelections(section, oldPath, newPath);
         for (const source of section.sources) {
           source.path = remapPath(source.path, oldPath, newPath);
           source.excluded = source.excluded.map((path) => remapPath(path, oldPath, newPath));
@@ -511,23 +564,31 @@ export class StudyCards {
   intervalCards(sectionId: string | null, order?: "source") {
     if (sectionId !== null && !this.sections.some(({ id }) => id === sectionId)) return [];
     const { data, index } = this.catalog;
-    const cards = sectionId === null ? this.allCards(data, index) : this.cards(sectionId, order);
     const files = new Set(this.vault.markdownFiles());
-    return cards.filter(isReviewCard).filter(({ path }) => files.has(path));
+    const cards = sectionId === null ? this.allCards(data, index) : this.cards(sectionId, order);
+    return cards.filter(isReviewCard).filter((card) => files.has(card.path)
+      && (sectionId !== null || data.sections.some((section) => this.belongsToSection(card, section, index))));
   }
 
   private sectionCards(sectionId: string, order?: "source", data = this.data, index = this.index) {
-    const cards = this.allCards(data, index).filter((card) => index.get(card.path)?.sections.includes(sectionId));
+    const section = data.sections.find(({ id }) => id === sectionId);
+    if (!section) return [];
+    const cards = this.allCards(data, index).filter((card) => this.belongsToSection(card, section, index));
     if (order !== "source") return cards;
-    const sources = this.section(sectionId, data).sources;
+    const { sources } = section;
     const positions = new Map<string, number>();
     for (const { path } of cards) {
       if (positions.has(path)) continue;
-      const membership = this.memberships(path, index.get(path)!.note, data).find(({ section }) => section === sectionId);
-      positions.set(path, membership ? sources.indexOf(membership.source) : sources.length);
+      positions.set(path, sources.findIndex((source) => sourceIncludesNote(source, index.get(path)!.note)));
     }
     return cards.sort((left, right) => positions.get(left.path)! - positions.get(right.path)!
       || left.path.localeCompare(right.path) || left.index - right.index);
+  }
+
+  private belongsToSection(card: Card, section: Section, index = this.index) {
+    if (!index.get(card.path)?.sections.includes(section.id)) return false;
+    const selected = section.noteSelections?.[card.path];
+    return selected === undefined || (card.id !== null && selected.includes(card.id));
   }
 
   missingSources(sectionId: string) {
@@ -594,7 +655,7 @@ export class StudyCards {
       const prior = this.data.progress[id];
       const current = { ...selected, progress: prior };
       const due = reviewDue(current);
-      if (!this.index.get(selected.path)?.sections.includes(review.sectionId) || !isReviewCard(current)
+      if (!this.belongsToSection(current, this.section(review.sectionId)) || !isReviewCard(current)
         || (due && due.getTime() > Date.parse(review.at))) {
         throw new StaleStudyState();
       }
@@ -722,7 +783,7 @@ export class StudyCards {
     return this.run("gradeFreeCheck", async () => {
       const session = this.freeSession(sessionId);
       if (selected.id !== session.cardIds[session.position]
-        || !this.index.get(selected.path)?.sections.includes(session.sectionId)) throw new StaleStudyState();
+        || !this.belongsToSection(selected, this.section(session.sectionId))) throw new StaleStudyState();
       const id = await this.verifyCard(selected);
       session.grades[id] = grade;
     }, { mutation });
@@ -734,7 +795,7 @@ export class StudyCards {
       if (previous && (previous.id !== session.id || previous.sectionId !== session.sectionId
         || previous.startedAt !== session.startedAt || previous.retryOf !== session.retryOf
         || JSON.stringify(previous.cardIds) !== JSON.stringify(session.cardIds))) throw new StaleStudyState();
-      const cards = this.allCards().filter((card) => this.index.get(card.path)?.sections.includes(session.sectionId));
+      const cards = this.sectionCards(session.sectionId);
       for (const [id, grade] of Object.entries(session.grades)) {
         if (previous?.grades[id] === grade) continue;
         const card = cards.find((item) => item.id === id);
@@ -857,7 +918,7 @@ export class StudyCards {
         };
       });
       const defaults = [
-        ...this.memberships(path, note, data).map(({ source }) => source.format),
+        ...this.memberships(note, data).map(({ source }) => source.format),
         ...items.filter(({ checked }) => checked).map(({ source }) => requests[source]!.format ?? single),
       ];
       const chosen = items.find(({ checked, choice }) => checked && choice.format)?.choice.format;
@@ -918,6 +979,7 @@ export class StudyCards {
     for (const path of missingFolders()) stale.add(path);
     if (stale.size) return { confirmed: false, paths: [...stale] } as const;
 
+    if (replaced) moveNoteSelections(section, replaced.path, requests[0]!.path);
     requests.forEach((request, index) => {
       const matches = latest.filter(({ source }) => source === index);
       if (request.kind === "file" && !matches.some(({ checked }) => checked)) return;
