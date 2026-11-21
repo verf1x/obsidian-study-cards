@@ -2,7 +2,10 @@ import { Modal, type App } from "obsidian";
 import { sample, type CheckCard, type Order } from "./check";
 
 export class SetupModal extends Modal {
-  constructor(app: App, private readonly section: string, private readonly cards: readonly CheckCard[],
+  private unsubscribe?: () => void;
+
+  constructor(app: App, private readonly section: string, private readonly readCards: () => readonly CheckCard[],
+    private readonly watchCards: (listener: () => void) => () => void,
     private readonly start: string | undefined, private readonly launch: (cards: CheckCard[]) => void,
     private readonly restoreFocus: () => void) {
     super(app);
@@ -25,31 +28,50 @@ export class SetupModal extends Modal {
     const actions = form.createDiv({ cls: "study-cards-dialog-actions" });
     actions.createEl("button", { text: "Отмена", type: "button" }).onclick = () => this.close();
     const begin = actions.createEl("button", { text: "Начать проверку", type: "submit", cls: "mod-cta" });
-    const startIndex = Math.max(0, this.cards.findIndex(({ id }) => id === this.start));
-    const update = () => {
+    let requested = 20;
+    count.oninput = () => {
+      const value = count.valueAsNumber;
+      if (Number.isInteger(value) && value > 0) requested = value;
+    };
+    const options = () => {
+      const cards = this.readCards();
       const random = order.value === "random";
-      const maximum = random ? this.cards.length : this.cards.length - startIndex;
-      const previous = count.valueAsNumber;
+      const startIndex = this.start ? cards.findIndex(({ id }) => id === this.start) : 0;
+      const maximum = random ? cards.length : startIndex < 0 ? 0 : cards.length - startIndex;
+      return { cards, random, startIndex, maximum };
+    };
+    const update = () => {
+      const { cards, random, maximum, startIndex } = options();
       count.max = String(maximum);
-      count.value = String(Math.min(Number.isFinite(previous) && previous > 0 ? previous : 20, maximum));
-      const first = this.cards[startIndex];
+      count.disabled = maximum === 0;
+      count.value = maximum > 0 ? String(Math.min(requested, maximum)) : "";
+      const first = cards[startIndex];
       origin.textContent = random ? "Выборка из всего раздела без повторов"
-        : first ? "Первый вопрос: " + first.question : "";
+        : first ? "Первый вопрос: " + first.question : this.start ? "Стартовая карточка недоступна" : "";
       available.textContent = "Доступно вопросов: " + maximum;
       begin.disabled = maximum === 0;
     };
     order.onchange = update;
     update();
+    this.unsubscribe = this.watchCards(update);
     form.onsubmit = (event) => {
       event.preventDefault();
-      const cards = sample(this.cards, order.value as Order, count.valueAsNumber, this.start);
-      if (cards.length === 0) return;
+      const { cards, maximum } = options();
+      const quantity = count.valueAsNumber;
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > maximum) {
+        update();
+        return;
+      }
+      const selected = sample(cards, order.value as Order, quantity, this.start);
       this.close();
-      this.launch(cards);
+      this.launch(selected);
     };
   }
 
-  onClose() { this.restoreFocus(); }
+  onClose() {
+    this.unsubscribe?.();
+    this.restoreFocus();
+  }
 }
 
 type Choice = { label: string; action: () => void; primary?: boolean };

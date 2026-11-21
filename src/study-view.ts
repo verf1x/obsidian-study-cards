@@ -98,10 +98,12 @@ export class StudyView extends ItemView {
 
   protected cardKey(card: Card) { return card.path + ":" + (card.id ?? "") + ":" + card.index; }
 
-  protected renderCard(root: HTMLElement, card: Card, key: string, open: boolean) {
+  protected renderCard(root: HTMLElement, card: Card, key: string, open: boolean, summaryContent?: (summary: HTMLElement) => void) {
     const details = root.createEl("details", { cls: "study-cards-item", attr: { "data-card": key } });
     details.open = open;
-    const summary = details.createEl("summary", { text: card.question });
+    const summary = details.createEl("summary");
+    if (summaryContent) summaryContent(summary);
+    else summary.textContent = card.question;
     this.renderCardSummary(summary, card);
     const body = details.createDiv();
     let rendered = false;

@@ -385,8 +385,18 @@ export class StudyCards {
     } : card);
   }
 
-  cards(sectionId: string) {
-    return this.allCards().filter((card) => this.index.get(card.path)?.sections.includes(sectionId));
+  cards(sectionId: string, order?: "source") {
+    const cards = this.allCards().filter((card) => this.index.get(card.path)?.sections.includes(sectionId));
+    if (order !== "source") return cards;
+    const sources = this.section(sectionId).sources;
+    const positions = new Map<string, number>();
+    for (const { path } of cards) {
+      if (positions.has(path)) continue;
+      const membership = this.memberships(path, this.index.get(path)!.note).find(({ section }) => section === sectionId);
+      positions.set(path, membership ? sources.indexOf(membership.source) : sources.length);
+    }
+    return cards.sort((left, right) => positions.get(left.path)! - positions.get(right.path)!
+      || left.path.localeCompare(right.path) || left.index - right.index);
   }
 
   errors(sectionId: string) {

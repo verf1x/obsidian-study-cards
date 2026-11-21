@@ -1,13 +1,14 @@
-import { Notice, type WorkspaceLeaf } from "obsidian";
+import { Notice, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { statuses } from "../markdown";
 import type { WatchVault } from "../source-modals";
 import type { Card, StudyCards } from "../study-cards";
 import { StudyView } from "../study-view";
-import { catalogCards, Check, isCheckCard, PrototypeChecks, type CheckCard, type Grade } from "./check";
+import { Check, isCheckCard, PrototypeChecks, type CheckCard, type Grade } from "./check";
 import { CheckModal, SetupModal } from "./modals";
 
 const layouts = { list: "Список", table: "Таблица", split: "С ответом" };
 type Layout = keyof typeof layouts;
+const layoutOrder = Object.keys(layouts) as Layout[];
 
 export class PrototypeView extends StudyView {
   private layout: Layout = "list";
@@ -17,10 +18,35 @@ export class PrototypeView extends StudyView {
   private lastAnswer?: { check: Check; id: string; markdown: string };
   private updated = false;
   private scrollTop = 0;
+  private unsubscribeChecks?: () => void;
 
   constructor(leaf: WorkspaceLeaf, study: StudyCards, watch: WatchVault, openNote: (path: string) => Promise<void>,
     private readonly checks: PrototypeChecks) {
     super(leaf, study, watch, openNote);
+  }
+
+  async onOpen() {
+    this.unsubscribeChecks = this.checks.subscribe(() => {
+      if (this.shownCheck !== this.checks.active) this.shownCheck = undefined;
+      this.render();
+    });
+    await super.onOpen();
+  }
+
+  async onClose() {
+    this.unsubscribeChecks?.();
+    await super.onClose();
+  }
+
+  getState() { return { ...super.getState(), layout: this.layout }; }
+
+  async setState(state: unknown, result: ViewStateResult) {
+    await super.setState(state, result);
+    if (state && typeof state === "object" && "layout" in state
+      && typeof state.layout === "string" && layoutOrder.includes(state.layout as Layout)) {
+      this.layout = state.layout as Layout;
+      this.render();
+    }
   }
 
   protected render() {
@@ -68,19 +94,8 @@ export class PrototypeView extends StudyView {
   }
 
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
-    const cards = catalogCards(this.study, sectionId);
-    const header = root.createDiv({ cls: "study-cards-catalog-header" });
-    header.createEl("h2", { text: "Карточки" });
-    const layout = header.createEl("label", { text: "Вид каталога" }).createEl("select", {
-      attr: { "aria-label": "Вид каталога" },
-    });
-    for (const [value, text] of Object.entries(layouts)) layout.createEl("option", { value, text });
-    layout.value = this.layout;
-    layout.onchange = () => {
-      this.layout = layout.value as Layout;
-      this.render();
-      root.querySelector<HTMLSelectElement>(".study-cards-catalog-header select")?.focus();
-    };
+    const cards = this.study.cards(sectionId, "source");
+    root.createEl("h2", { text: "Карточки", cls: "study-cards-catalog-header" });
     this.renderErrors(root, sectionId);
     if (!cards.length) {
       root.createEl("p", { text: "Добавьте источник или создайте карточку.", cls: "study-cards-empty" });
@@ -92,6 +107,36 @@ export class PrototypeView extends StudyView {
       const list = root.createDiv({ cls: "study-cards-catalog-list" });
       cards.forEach((card) => this.renderCard(list, card, this.cardKey(card), opened.has(this.cardKey(card))));
     }
+    this.renderSwitcher(root);
+  }
+
+  private renderSwitcher(root: HTMLElement) {
+    const bar = root.createEl("nav", { cls: "study-cards-layout-switcher", attr: { "aria-label": "Вид каталога" } });
+    const switchLayout = (layout: Layout, focus: string) => {
+      this.layout = layout;
+      this.render();
+      this.focus(focus);
+      void this.app.workspace.requestSaveLayout();
+    };
+    const step = (direction: -1 | 1, focus: string) => {
+      const index = layoutOrder.indexOf(this.layout);
+      switchLayout(layoutOrder[(index + direction + layoutOrder.length) % layoutOrder.length]!, focus);
+    };
+    bar.createEl("button", { text: "←", attr: { "aria-label": "Предыдущий вид каталога", "data-focus": "layout-back" } })
+      .onclick = () => step(-1, "layout-back");
+    const layout = bar.createEl("label", { text: "Вид каталога" }).createEl("select", { attr: { "data-focus": "layout" } });
+    for (const [value, text] of Object.entries(layouts)) layout.createEl("option", { value, text });
+    layout.value = this.layout;
+    layout.onchange = () => switchLayout(layout.value as Layout, "layout");
+    bar.createEl("button", { text: "→", attr: { "aria-label": "Следующий вид каталога", "data-focus": "layout-next" } })
+      .onclick = () => step(1, "layout-next");
+    bar.onkeydown = (event) => {
+      if (event.altKey || event.ctrlKey || event.shiftKey || event.metaKey || event.target === layout) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      event.stopPropagation();
+      step(event.key === "ArrowLeft" ? -1 : 1, "layout-next");
+    };
   }
 
   private renderTable(root: HTMLElement, cards: Card[], opened: Set<string | null>) {
@@ -100,22 +145,12 @@ export class PrototypeView extends StudyView {
     ["№", "Вопрос", "Заметка", "Статус освоения"].forEach((label) => header.createSpan({ text: label }));
     cards.forEach((card, index) => {
       const key = this.cardKey(card);
-      const details = table.createEl("details", { cls: "study-cards-item", attr: { "data-card": key } });
-      const summary = details.createEl("summary", { cls: "study-cards-table-row" });
-      summary.createSpan({ text: String(index + 1), cls: "study-cards-muted" });
-      summary.createSpan({ text: card.question });
-      summary.createSpan({ text: card.path, cls: "study-cards-muted study-cards-table-path" });
-      this.renderCardSummary(summary, card);
-      const body = details.createDiv();
-      let rendered = false;
-      const expand = () => {
-        if (!details.open || rendered) return;
-        rendered = true;
-        this.renderCardBody(body, card);
-      };
-      details.ontoggle = expand;
-      details.open = opened.has(key);
-      expand();
+      this.renderCard(table, card, key, opened.has(key), (summary) => {
+        summary.addClass("study-cards-table-row");
+        summary.createSpan({ text: String(index + 1), cls: "study-cards-muted" });
+        summary.createSpan({ text: card.question });
+        summary.createSpan({ text: card.path, cls: "study-cards-muted study-cards-table-path" });
+      });
     });
   }
 
@@ -162,15 +197,20 @@ export class PrototypeView extends StudyView {
   }
 
   private setup(sectionId: string, name: string, start?: string) {
-    const open = () => {
-      const cards = catalogCards(this.study, sectionId).filter(isCheckCard);
-      new SetupModal(this.app, name, cards, start, (selected) =>
-        this.showCheck(new Check(sectionId, name, selected)), () => this.focus("catalog")).open();
+    const open = (previous?: Check) => {
+      new SetupModal(this.app, name, () => this.study.cards(sectionId, "source").filter(isCheckCard),
+        (listener) => this.study.subscribe(listener), start, (selected) => {
+          if (this.checks.active !== previous) {
+            new Notice("Свободная проверка изменилась. Откройте настройку снова.");
+            return;
+          }
+          this.showCheck(new Check(sectionId, name, selected));
+        }, () => this.focus("catalog")).open();
     };
     this.replaceCheck(open);
   }
 
-  private replaceCheck(launch: () => void) {
+  private replaceCheck(launch: (previous?: Check) => void) {
     const active = this.checks.active;
     if (!active) {
       launch();
@@ -178,16 +218,17 @@ export class PrototypeView extends StudyView {
     }
     new CheckModal(this.app, "Есть незавершённая проверка", active.sectionName + " · оценено "
       + active.graded + " из " + active.questions.length + ". При запуске новой проверки текущие оценки будут сброшены.", [
-      { label: "Настроить новую", action: launch },
-      { label: "Продолжить текущую", action: () => this.showCheck(active), primary: true },
+      { label: "Настроить новую", action: () => launch(active) },
+      { label: "Продолжить текущую", action: () => {
+        if (this.checks.active) this.showCheck(this.checks.active);
+      }, primary: true },
     ]).open();
   }
 
   private showCheck(check: Check) {
-    this.checks.active = check;
     this.shownCheck = check;
     this.report = undefined;
-    this.render();
+    this.checks.start(check);
     this.focus("question");
   }
 
@@ -218,7 +259,8 @@ export class PrototypeView extends StudyView {
   }
 
   private renderCheck(root: HTMLElement, check: Check) {
-    const card = this.study.cards(check.sectionId).filter(isCheckCard).find(({ id }) => id === check.current.id);
+    const source = this.study.cards(check.sectionId).find(({ id }) => id === check.current.id);
+    const card = source && isCheckCard(source) ? source : undefined;
     const revealed = check.revealed.has(check.current.id);
     if (this.lastAnswer?.check !== check || this.lastAnswer.id !== check.current.id) this.updated = false;
     else if (card && this.lastAnswer.markdown !== card.answer) this.updated = true;
@@ -239,9 +281,11 @@ export class PrototypeView extends StudyView {
     } });
 
     const body = panel.createDiv({ cls: "study-cards-check-body" });
-    body.createEl("h1", { text: card?.question ?? check.current.question, attr: { tabindex: "-1", "data-focus": "question" } });
+    body.createEl("h1", { text: source?.question ?? check.current.question, attr: { tabindex: "-1", "data-focus": "question" } });
     if (!card) {
-      body.createEl("p", { text: "Карточка недоступна. Можно перейти дальше.", cls: "study-cards-empty" });
+      const text = source?.status === "invalid" ? "Некорректный статус освоения. Исправьте его в каталоге или перейдите дальше."
+        : "Карточка недоступна. Можно перейти дальше.";
+      body.createEl("p", { text, cls: "study-cards-empty" });
     } else {
       body.createEl("button", { text: card.path, cls: "study-cards-note-link" }).onclick = () => this.perform(this.openNote(card.path));
       if (revealed) {
@@ -277,8 +321,7 @@ export class PrototypeView extends StudyView {
         text: "Показать эталон", cls: "mod-cta", attr: { "data-focus": "reveal", "aria-keyshortcuts": "Space" },
       });
       reveal.onclick = () => {
-        check.revealed.add(card.id);
-        this.render();
+        this.checks.update(check, () => { check.revealed.add(card.id); });
         this.focus("answer");
       };
       footer.createEl("p", { text: "Пробел — раскрыть эталон", cls: "study-cards-shortcuts" });
@@ -298,8 +341,7 @@ export class PrototypeView extends StudyView {
   }
 
   private move(check: Check, direction: -1 | 1) {
-    check.move(direction);
-    this.render();
+    this.checks.update(check, () => check.move(direction));
     this.focus("question");
   }
 
@@ -308,8 +350,7 @@ export class PrototypeView extends StudyView {
       "aria-pressed": String(check.current.grade === grade), "aria-keyshortcuts": key, "data-focus": grade, "data-grade": grade,
     } });
     button.onclick = () => {
-      check.rate(card, grade);
-      this.render();
+      this.checks.update(check, () => check.rate(card, grade));
       this.focus(grade);
     };
     return button;
@@ -334,8 +375,7 @@ export class PrototypeView extends StudyView {
       + ". Без оценки: " + check.ungraded + ".";
     new CheckModal(this.app, "Подтвердить итог?", summary, [{
       label: "Подтвердить итог", primary: true, action: () => {
-        this.checks.finish(check);
-        this.showReport(check);
+        if (this.checks.finish(check)) this.showReport(check);
       },
     }], () => this.focus(focus)).open();
   }
@@ -368,7 +408,8 @@ export class PrototypeView extends StudyView {
       const retry = report.createEl("button", { text: "Повтор ошибок", cls: "mod-cta" });
       retry.disabled = !mistakes.some(({ id }) => current.has(id));
       if (retry.disabled) report.createEl("p", { text: "Все вопросы с ошибками недоступны.", cls: "study-cards-muted" });
-      retry.onclick = () => this.replaceCheck(() => {
+      retry.onclick = () => this.replaceCheck((previous) => {
+        if (this.checks.active !== previous) return;
         const available = this.study.cards(check.sectionId).filter(isCheckCard);
         if (!mistakes.some((item) => available.some(({ id }) => id === item.id))) {
           new Notice("Все вопросы с ошибками недоступны");

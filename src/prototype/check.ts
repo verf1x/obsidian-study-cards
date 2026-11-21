@@ -1,4 +1,4 @@
-import type { Card, Source, StudyCards } from "../study-cards";
+import type { Card } from "../study-cards";
 
 export type Grade = "correct" | "wrong";
 export type Order = "standard" | "random";
@@ -36,34 +36,43 @@ export class Check {
 }
 
 export class PrototypeChecks {
-  active?: Check;
+  private current?: Check;
+  private readonly listeners = new Set<() => void>();
   readonly history: Check[] = [];
 
+  get active() { return this.current; }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  start(check: Check) {
+    this.current = check;
+    this.notify();
+  }
+
+  update(check: Check, change: () => void) {
+    if (this.current !== check) return;
+    change();
+    this.notify();
+  }
+
   finish(check: Check) {
-    this.active = undefined;
+    if (this.current !== check) return false;
+    this.current = undefined;
     if (check.graded > 0) this.history.unshift(check);
+    this.notify();
+    return true;
+  }
+
+  private notify() {
+    for (const listener of this.listeners) listener();
   }
 }
 
-function includes(source: Source, path: string) {
-  if (source.kind === "file") return path === source.path;
-  if (source.excluded.includes(path)) return false;
-  if (source.recursive) return !source.path || path.startsWith(source.path + "/");
-  return path.slice(0, Math.max(0, path.lastIndexOf("/"))) === source.path;
-}
-
-export function catalogCards(study: StudyCards, sectionId: string) {
-  const sources = study.sections.find(({ id }) => id === sectionId)?.sources ?? [];
-  const cards = study.cards(sectionId).map((card) => ({
-    card, sourceIndex: sources.findIndex((source) => includes(source, card.path)),
-  }));
-  cards.sort((left, right) => left.sourceIndex - right.sourceIndex
-    || left.card.path.localeCompare(right.card.path) || left.card.index - right.card.index);
-  return cards.map(({ card }) => card);
-}
-
 export function isCheckCard(card: Card): card is CheckCard {
-  return card.identity === "valid" && card.id !== null;
+  return card.identity === "valid" && card.id !== null && card.status !== "invalid";
 }
 
 export function sample(cards: readonly CheckCard[], order: Order, count: number, start?: string) {
