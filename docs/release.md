@@ -56,7 +56,7 @@ npm run test-vault -- "../Study Cards acceptance" "../Study Cards assets"
 
 ## Минимальная версия Obsidian
 
-`1.8.7` в текущем манифесте — предварительное значение. В опубликованных типах Obsidian 1.8.7 есть используемые `MarkdownRenderer.render`, `Vault.process`, `DataAdapter.process` и методы локального хранилища `App`. Перед финальным кандидатом заново сверьте используемые API Obsidian и Web API. Текущая рабочая сборка использует `crypto.randomUUID`, `crypto.subtle.digest` и `TextEncoder`. Для FSRS дополнительно сверьте требования JavaScript и WebView. [Исследование ts-fsrs](research/ts-fsrs.md)
+Проверяйте совместимость с версией из `minAppVersion`. Сверяйте используемые `MarkdownRenderer.render`, `Vault.process`, `DataAdapter.process`, методы локального хранилища `App` и `Vault.create` для мобильного экспорта. Перед финальным кандидатом заново сверьте используемые API Obsidian и Web API. Текущая рабочая сборка использует `crypto.randomUUID`, `crypto.subtle.digest` и `TextEncoder`. Для FSRS дополнительно сверьте требования JavaScript и WebView. [Исследование ts-fsrs](research/ts-fsrs.md)
 
 Укажите в `minAppVersion` самую старую версию, на которой полный прогон прошёл на всех трёх платформах. Если старые клиенты недоступны для проверки на всех трёх, используйте проверенную стабильную версию. Запишите подтверждённый минимум и проверенные платформы в README. macOS и iOS остаются доступными для установки со статусом «совместимость не проверена». При изменении минимума после публикации обновите [`versions.json`](https://docs.obsidian.md/Reference/Versions), сохранив совместимые выпуски.
 
