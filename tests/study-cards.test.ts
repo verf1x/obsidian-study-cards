@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { StudyCards, type StudyVault } from "../src/study-cards";
 
-import { StudyStorage, type StudyStorageIO } from "../src/study-storage";
+import { SharedWriteNotApplied, StudyStorage, type StudyStorageIO } from "../src/study-storage";
 
 async function testVault() {
   const root = await mkdtemp(join(tmpdir(), "study-cards-"));
@@ -19,7 +19,7 @@ async function testVault() {
     async readShared() { return state; },
     async writeShared(expected, next) {
       const apply = () => {
-        if (state !== expected) throw new Error("changed");
+        if (state !== expected) throw new SharedWriteNotApplied("changed");
         state = next;
       };
       if (persistHook) await persistHook(apply);
@@ -516,7 +516,7 @@ test("интервальная оценка и срок сохраняются �
   vault.beforePersist(() => {
     assert.equal(study.persistence.saving, true);
     assert.equal(study.progress.progress[uuid], undefined);
-    throw new Error("disk full");
+    throw new SharedWriteNotApplied("disk full");
   });
   await assert.rejects(study.recordReview(intent, selected, review, { dueAt: "2026-11-22T10:00:00Z" }), /Повторите действие/);
   assert.equal(study.progress.progress[uuid], undefined);
@@ -584,7 +584,7 @@ test("свободная проверка сохраняет исправлен�
 
   const finish = mutation();
   const finishedAt = "2026-11-21T11:00:00Z";
-  vault.beforePersist(() => { throw new Error("disk full"); });
+  vault.beforePersist(() => { throw new SharedWriteNotApplied("disk full"); });
   await assert.rejects(study.finishFreeCheck(finish, session.id, finishedAt), /Повторите действие/);
   assert.equal(study.progress.freeResults.length, 0);
   assert.equal(study.progress.freeSession?.id, session.id);
