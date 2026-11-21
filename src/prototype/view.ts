@@ -55,13 +55,15 @@ export class PrototypeView extends StudyView {
     const previous = this.contentEl.querySelector<HTMLElement>(".study-cards-check");
     const focused = this.contentEl.ownerDocument.activeElement;
     const focus = this.contentEl.contains(focused) ? focused?.getAttribute("data-focus") : undefined;
-    const searchSelection = focus === "search" ? (focused as HTMLInputElement).selectionStart : null;
+    const search = focus === "search" ? focused as HTMLInputElement : undefined;
+    const start = search?.selectionStart;
+    const end = search?.selectionEnd;
     const sameQuestion = previous?.dataset.position === String(this.shownCheck?.position);
     this.scrollTop = sameQuestion ? previous?.querySelector(".study-cards-check-body")?.scrollTop ?? 0 : 0;
     super.render();
     if (focus && (sameQuestion || (!previous && !this.shownCheck && !this.report))) {
       const target = this.focus(focus);
-      if (searchSelection !== null) (target as HTMLInputElement | null)?.setSelectionRange(searchSelection, searchSelection);
+      if (start != null && end != null) (target as HTMLInputElement | null)?.setSelectionRange(start, end);
     }
   }
 

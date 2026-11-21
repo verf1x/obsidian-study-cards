@@ -630,6 +630,23 @@ export class EnrollmentPreview {
 
   get sources(): readonly SourceRequest[] { return this.requests; }
 
+  replaceSources(sources: readonly SourceRequest[]) {
+    const previous = new Map(this.choices);
+    this.choices.clear();
+    for (const [index, source] of sources.entries()) {
+      const oldIndex = this.requests.findIndex(({ kind, path }) => kind === source.kind && path === source.path);
+      const old = this.requests[oldIndex];
+      const choices = previous.get(oldIndex);
+      if (!old || !choices) continue;
+      const changedFormat = !sameFormat(old.format ?? single, source.format ?? single);
+      this.choices.set(index, changedFormat
+        ? new Map([...choices].map(([path, { checked }]) => [path, { checked }]))
+        : choices);
+    }
+    this.requests.splice(0, this.requests.length, ...sources.map((source) => ({ ...source })));
+    this.rows = [];
+  }
+
   choose(source: number, path: string, choice: Choice) {
     let notes = this.choices.get(source);
     if (!notes) this.choices.set(source, notes = new Map());

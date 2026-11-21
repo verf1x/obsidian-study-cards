@@ -67,6 +67,7 @@ function formatFields(root: HTMLElement, initial: Format, onChange: (format: For
 
 export class SelectSourcesModal extends Modal {
   private readonly requests: SourceRequest[];
+  private previousPreview?: EnrollmentPreview;
 
   constructor(app: App, private readonly study: StudyCards, private readonly watch: WatchVault,
     private readonly section: string, initial: SourceRequest[], private readonly lockSelection = false) {
@@ -116,19 +117,23 @@ export class SelectSourcesModal extends Modal {
     const next = actions.createEl("button", { text: "Предпросмотр", cls: "mod-cta" });
     next.onclick = () => {
       try {
+        const preview = this.previousPreview ?? this.study.preview(this.section, this.requests);
+        if (this.previousPreview) preview.replaceSources(this.requests);
+        const modal = new PreviewModal(this.app, this.watch, preview, this.lockSelection ? "Сохранить" : "Подключить", () => {
+          this.previousPreview = preview;
+          this.requests.splice(0, this.requests.length, ...preview.sources.map((source) => ({ ...source })));
+          this.open();
+        });
         this.close();
-        new PreviewModal(this.app, this.study, this.watch, this.section, this.requests,
-          this.lockSelection ? "Сохранить" : "Подключить", () => this.open()).open();
+        modal.open();
       } catch (error) {
         new Notice(message(error));
-        this.open();
       }
     };
   }
 }
 
 class PreviewModal extends Modal {
-  private readonly preview: EnrollmentPreview;
   private unsubscribe?: () => void;
   private list!: HTMLElement;
   private feedback!: HTMLElement;
@@ -139,17 +144,16 @@ class PreviewModal extends Modal {
   private busy = false;
   private openNow = false;
 
-  constructor(app: App, study: StudyCards, private readonly watch: WatchVault, section: string,
-    sources: SourceRequest[], private readonly confirmLabel: string, private readonly goBack: () => void) {
+  constructor(app: App, private readonly watch: WatchVault, private readonly preview: EnrollmentPreview,
+    private readonly confirmLabel: string, private readonly goBack: () => void) {
     super(app);
-    this.preview = study.preview(section, sources);
   }
 
   onOpen() {
     this.openNow = true;
     this.setTitle("Предпросмотр подключения");
     this.contentEl.addClass("study-cards-source-modal");
-    this.contentEl.createEl("p", { text: "Study Cards добавит в выбранные заметки служебные свойства и недостающие UUID." });
+    this.contentEl.createEl("p", { text: "Study Cards добавит служебные свойства и недостающие UUID. Новые карточки в этих источниках получат UUID автоматически." });
     this.list = this.contentEl.createDiv({ cls: "study-cards-source-review" });
     this.feedback = this.contentEl.createEl("p", { attr: { role: "status" } });
     const actions = this.contentEl.createDiv({ cls: "study-cards-dialog-actions" });
@@ -179,7 +183,7 @@ class PreviewModal extends Modal {
   private async refresh() {
     if (this.busy || !this.openNow) return;
     this.busy = true;
-    this.confirm.disabled = true;
+    this.confirm.disabled = this.backButton.disabled = true;
     const paths = this.refreshAll ? undefined : new Set(this.pending);
     this.pending.clear();
     this.refreshAll = false;
@@ -190,6 +194,7 @@ class PreviewModal extends Modal {
       this.feedback.textContent = message(error);
     } finally {
       this.busy = false;
+      this.backButton.disabled = false;
       if (this.refreshAll || this.pending.size) void this.refresh();
     }
   }

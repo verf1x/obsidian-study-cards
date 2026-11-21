@@ -144,6 +144,28 @@ test("обновляет предпросмотр папки и сохраняе
   assert.ok(study.cards(section).some(({ question }) => question === "Вложенный вопрос"));
 });
 
+test("сохраняет исключение при переименовании файла и изменении списка источников", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const excluded = "# Черновик\nОтвет\n";
+  await vault.files.create("Черновик.md", excluded);
+  await vault.files.create("Вопрос.md", "# Вопрос\nОтвет\n");
+  const study = vault.open();
+  const section = await study.addSection("Курс");
+  const preview = study.preview(section, [{ kind: "file", path: "Черновик.md" }]);
+  await preview.refresh();
+  preview.choose(0, "Черновик.md", { checked: false });
+  await vault.move("Черновик.md", "Пропустить.md");
+  preview.rename("Черновик.md", "Пропустить.md");
+  preview.replaceSources([{ kind: "file", path: "Вопрос.md" }, ...preview.sources]);
+
+  const rows = await preview.refresh();
+  assert.equal(rows.find(({ path }) => path === "Пропустить.md")?.checked, false);
+  assert.deepEqual(await preview.confirm(), { confirmed: true });
+  assert.equal(await vault.files.read("Пропустить.md"), excluded);
+  assert.deepEqual(study.cards(section).map(({ question }) => question), ["Вопрос"]);
+});
+
 test("запрашивает повторное подтверждение после изменения файла во время записи и ждёт редактор", async (t) => {
   const vault = await testVault();
   t.after(vault.cleanup);
