@@ -1,4 +1,5 @@
 import { Component, ItemView, MarkdownRenderer, Modal, Notice, type App, type WorkspaceLeaf } from "obsidian";
+import { FreeCheckView } from "./free-check-view";
 import { statuses, type Status } from "./markdown";
 import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
 import { renderStudyStorage } from "./study-storage-view";
@@ -14,11 +15,15 @@ export interface CatalogActions {
 
 export class StudyView extends ItemView {
   private unsubscribe?: () => void;
+  private isOpen = false;
   private answers = new Component();
+  private readonly freeCheck: FreeCheckView;
 
   constructor(leaf: WorkspaceLeaf, protected readonly study: StudyCards, private readonly watch: WatchVault,
     protected readonly openNote: (path: string) => Promise<void>) {
     super(leaf);
+    this.freeCheck = new FreeCheckView(this.app, study, this.contentEl, () => { if (this.isOpen) this.render(); },
+      (root, card) => this.renderMarkdown(root, card));
   }
 
   getViewType() { return viewType; }
@@ -26,11 +31,13 @@ export class StudyView extends ItemView {
   getIcon() { return "book-open"; }
 
   async onOpen() {
+    this.isOpen = true;
     this.unsubscribe = this.study.subscribe(() => this.render());
     this.render();
   }
 
   async onClose() {
+    this.isOpen = false;
     this.unsubscribe?.();
     this.removeChild(this.answers);
   }
@@ -89,9 +96,11 @@ export class StudyView extends ItemView {
     this.renderCatalog(root, section.id, opened);
   }
 
-  protected renderAlternateScreen(_root: HTMLElement): boolean { return false; }
+  protected renderAlternateScreen(root: HTMLElement): boolean { return this.freeCheck.renderScreen(root); }
 
-  protected renderSectionActions(_root: HTMLElement, _sectionId: string, _name: string, _opened: Set<string | null>) {}
+  protected renderSectionActions(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
+    this.freeCheck.renderCatalog(root, sectionId, name, opened);
+  }
 
   protected renderCatalogActions(toolbar: HTMLElement, _sourceRow: HTMLElement, actions: CatalogActions) {
     toolbar.createEl("button", { text: "Новый раздел" }).onclick = actions.createSection;
@@ -180,7 +189,10 @@ export class StudyView extends ItemView {
     }
   }
 
-  protected renderCardActions(_root: HTMLElement, _card: Card) {}
+  protected renderCardActions(root: HTMLElement, card: Card) {
+    const section = this.study.sections.find(({ id }) => id === this.study.activeSection);
+    if (section) this.freeCheck.renderCardAction(root, card, section.id, section.name);
+  }
 
   protected async renderMarkdown(root: HTMLElement, card: Card) {
     root.addClass("markdown-rendered", "study-cards-markdown");

@@ -1,8 +1,8 @@
-import type { Card } from "../study-cards";
+import { sampleCards, type CheckCard } from "../free-check";
+export { isCheckCard, type CheckCard } from "../free-check";
 
 export type Grade = "correct" | "wrong";
 export type Order = "standard" | "random";
-export type CheckCard = Card & { id: string };
 
 interface Question { id: string; question: string; grade?: Grade }
 
@@ -71,19 +71,6 @@ export class PrototypeChecks {
   }
 }
 
-export function isCheckCard(card: Card): card is CheckCard {
-  return card.identity === "valid" && card.id !== null && card.status !== "invalid";
-}
-
 export function sample(cards: readonly CheckCard[], order: Order, count: number, start?: string) {
-  if (order === "standard") {
-    const offset = Math.max(0, cards.findIndex(({ id }) => id === start));
-    return cards.slice(offset, offset + count);
-  }
-  const shuffled = [...cards];
-  for (let index = 0; index < count; index++) {
-    const next = index + Math.floor(Math.random() * (shuffled.length - index));
-    [shuffled[index], shuffled[next]] = [shuffled[next]!, shuffled[index]!];
-  }
-  return shuffled.slice(0, count);
+  return sampleCards(cards, order, count, Math.max(0, cards.findIndex(({ id }) => id === start)));
 }
