@@ -4,7 +4,7 @@ Study cards for Obsidian.
 
 ## Local installation
 
-Run `npm ci` and `npm run build`. Copy `main.js`, `manifest.json` and `styles.css` into `.obsidian/plugins/study-cards/` inside a test vault. Enable **Study Cards** in Community plugins, then open it from the ribbon or the command palette.
+Use Obsidian 1.8.7 or later. Run `npm ci` and `npm run build`. Copy `main.js`, `manifest.json` and `styles.css` into `.obsidian/plugins/study-cards/` inside a test vault. Enable **Study Cards** in Community plugins, then open it from the ribbon or the command palette.
 
 ## Catalog and free-check prototype (#9)
 
@@ -17,6 +17,12 @@ In an existing demo vault, connect `Материалы/Энтропия исто
 Create a study section, then add Markdown files or folders. The preview shows which notes will be connected and which headings become cards. For an existing note to join an active folder source automatically, set `qcards_source: true` in its properties.
 
 Run `npm run typecheck` and `npm test` for local verification.
+
+## Progress and backups
+
+Study Cards stores shared progress in `Study Cards/data.json` inside the vault. Enable syncing of **Other file types** in Obsidian Sync and include the **Study Cards** folder. The last opened study section and recovery copies are stored on the device. If versions diverge, open the Study Cards tab to choose a version before making further changes.
+
+Expand **Данные Study Cards** in the tab to export a backup or preview and import one. Copy Markdown notes separately. If the import shows a source as **Недоступен**, use **Переподключить** to find it at its new path. Card progress follows the UUID in the note.
 
 ## Contributing
 

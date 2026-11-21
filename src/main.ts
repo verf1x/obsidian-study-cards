@@ -1,4 +1,6 @@
-import { Notice, Plugin, TFile, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TFile, TFolder, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { obsidianStudyStorage } from "./obsidian-study-storage";
+import { sharedStudyPath, StudyStorage } from "./study-storage";
 import { studyVault } from "./obsidian-vault";
 import { message, SelectSourcesModal, sourceRequest, type VaultChange, type WatchVault } from "./source-modals";
 import { StudyCards, type SourceRequest } from "./study-cards";
@@ -15,8 +17,10 @@ export default class StudyCardsPlugin extends Plugin {
   };
 
   async onload() {
-    this.study = new StudyCards(studyVault(this.app), await this.loadData(),
-      (data) => this.saveData(data), () => globalThis.crypto.randomUUID());
+    const id = () => globalThis.crypto.randomUUID();
+    const io = await obsidianStudyStorage(this.app, (close) => this.register(close));
+    const storage = await StudyStorage.open(io, await this.loadData(), id);
+    this.study = new StudyCards(studyVault(this.app), storage, id);
     this.registerView(viewType, (leaf) => this.createView(leaf, this.study, this.watch, this.openNote));
     this.addRibbonIcon("book-open", "Study Cards", () => this.perform(this.showView()));
     this.addCommand({ id: "open-study-cards", name: "Открыть Study Cards", callback: () => this.perform(this.showView()) });
@@ -33,23 +37,34 @@ export default class StudyCardsPlugin extends Plugin {
 
     this.app.workspace.onLayoutReady(() => {
       if (this.stopped) return;
+      const refresh = () => this.perform(this.study.refreshStorage());
       const update = (file: TAbstractFile) => {
+        if (file.path === sharedStudyPath) refresh();
         if (file instanceof TFile && file.extension.toLowerCase() === "md") {
           this.changed({ path: file.path }, this.study.update(file.path));
         }
       };
-      this.registerEvent(this.app.vault.on("create", update));
+      this.registerEvent(this.app.vault.on("create", (file) => {
+        if (file instanceof TFolder) this.changed({ path: file.path }, this.study.refreshSources());
+        else update(file);
+      }));
       this.registerEvent(this.app.vault.on("modify", update));
       this.registerEvent(this.app.metadataCache.on("changed", update));
       this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-        this.changed({ path: file.path, oldPath }, this.study.rename(oldPath, file.path));
+        if ([file.path, oldPath].some((path) => path === sharedStudyPath || sharedStudyPath.startsWith(path + "/"))) refresh();
+        else this.changed({ path: file.path, oldPath }, this.study.rename(oldPath, file.path));
       }));
       this.registerEvent(this.app.vault.on("delete", (file) => {
-        this.changed({ path: file.path }, this.study.delete(file.path));
+        if (file.path === sharedStudyPath || sharedStudyPath.startsWith(file.path + "/")) refresh();
+        else this.changed({ path: file.path }, this.study.delete(file.path));
       }));
       this.registerEvent(this.app.workspace.on("editor-change", (_editor, info) => {
         if (info.file) this.notify({ path: info.file.path });
       }));
+      this.registerDomEvent(window, "focus", refresh);
+      this.registerInterval(window.setInterval(() => {
+        if (!document.hidden) refresh();
+      }, 5000));
       this.perform(this.study.scan());
     });
     this.register(() => { this.stopped = true; });
