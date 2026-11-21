@@ -2,7 +2,7 @@
 
 [Русская версия](#russian)
 
-Every connected source contributes all its cards to the study section. The mode's existing eligibility rules apply. Learners narrow a free check in its setup. This replaces the saved per-source question subsets from [#46](https://github.com/verf1x/obsidian-study-cards/issues/46), including empty subsets. A section is a collection of sources, with question selection available when starting a check.
+Every connected source contributes all its cards to the study section, subject to each mode's existing eligibility rules. Learners narrow a free check in its setup so that choosing questions leaves the section's sources intact. This replaces the saved per-source question subsets from [#46](https://github.com/verf1x/obsidian-study-cards/issues/46), including empty subsets.
 
 The last manual selection belongs to the study section in shared state and travels with vault data and snapshots under [ADR 0006](0006-shared-study-state.md). Save the card UUIDs in the same shared-state update that starts the manual check. This lets a learner reopen the same selection on another device while keeping a cancelled setup local to the open pane.
 
@@ -16,7 +16,7 @@ Deleting a section removes its source connections and last manual selection. The
 
 # Состав раздела определяют подключённые источники
 
-Каждый подключённый источник добавляет в учебный раздел все свои карточки. Действуют существующие правила допуска выбранного режима. Ученик сужает состав свободной проверки при её настройке. Это решение заменяет сохранённые подборки вопросов по источникам из [#46](https://github.com/verf1x/obsidian-study-cards/issues/46), включая пустые. В разделе хранятся подключения источников, а отдельные вопросы выбираются при запуске проверки.
+Каждый подключённый источник добавляет в учебный раздел все свои карточки с учётом существующих правил допуска выбранного режима. Ученик сужает состав свободной проверки при её настройке, сохраняя подключения источников. Это решение заменяет сохранённые подборки вопросов по источникам из [#46](https://github.com/verf1x/obsidian-study-cards/issues/46), включая пустые.
 
 Последний ручной набор принадлежит учебному разделу в общем состоянии и переносится вместе с данными vault и снимками по [ADR 0006](0006-shared-study-state.md). UUID карточек сохраняются в той же записи общего состояния, что и запуск ручной проверки. Ученик может восстановить набор на другом устройстве, а отменённая настройка остаётся в пределах открытой панели.
 
