@@ -167,7 +167,7 @@ class DuplicateModal extends Modal {
       const select = this.contentEl.createEl("label", { cls: "study-cards-form", text: label }).createEl("select");
       select.createEl("option", { value: "", text: "Выберите карточку" }).disabled = true;
       cards.forEach((card, index) => select.createEl("option", {
-        text: card.path + " · " + card.question + (card.from ? " · @" + card.from : ""),
+        text: card.path + " · " + card.question + " · строка " + card.line,
         value: String(index),
       }));
       select.value = "";

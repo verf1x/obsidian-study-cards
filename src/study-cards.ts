@@ -45,6 +45,7 @@ interface IndexedNote {
 export interface Card extends MarkdownCard {
   path: string;
   index: number;
+  line: number;
   identity: "valid" | "missing" | "invalid" | "duplicate";
   progress?: CardProgress;
 }
@@ -56,8 +57,7 @@ export interface PreviewRow {
   format: Format;
   formats: Format[];
   needsFormat: boolean;
-  cards: MarkdownCard[];
-  lines: { first: number; last: number }[];
+  cards: (MarkdownCard & { firstLine: number; lastLine: number })[];
   dirty: boolean;
   error?: string;
 }
@@ -67,7 +67,7 @@ export type Confirmation = { confirmed: true } | { confirmed: false; paths: read
 
 const emptyData: StudyData = { sections: [], activeSection: null, knownNotes: {}, progress: {} };
 const hasPath = (path: string, parent: string) => parent === "" || path === parent || path.startsWith(parent + "/");
-const samePath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
+const remapPath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
   ? newPath + path.slice(oldPath.length) : path;
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 
@@ -83,17 +83,48 @@ function answerHash(answer: string) {
 }
 
 function previousIds(cards: MarkdownCard[], known: KnownNote | undefined, format: Format) {
-  const previous = known && sameFormat(known.format, format) ? known.cards : [];
-  const current = new Set(cards.map(({ id }) => id));
-  const available = previous.filter(({ id }) => !current.has(id));
-  const missing = cards.filter((card) => !card.id);
+  const previous = known && (sameFormat(known.format, format) || (known.format.mode === "single" && format.mode === "single"))
+    ? known.cards : [];
+  const available = previous.map((record, index) => ({ record, index }));
+  const anchors = new Map<number, number>();
   const ids = new Map<MarkdownCard, string>();
-  for (const card of missing) {
+  const claim = (card: MarkdownCard, index: number, candidate: number) => {
+    if (candidate < 0) return;
+    const [old] = available.splice(candidate, 1);
+    anchors.set(index, old!.index);
+    if (!card.id) ids.set(card, old!.record.id);
+  };
+  cards.forEach((card, index) => {
+    if (!card.id) return;
+    const exact = available.findIndex(({ record }) => record.id === card.id && record.question === card.question);
+    claim(card, index, exact >= 0 ? exact : available.findIndex(({ record }) => record.id === card.id));
+  });
+  cards.forEach((card, index) => {
+    if (!card.id) claim(card, index, available.findIndex(({ record }) => record.question === card.question));
+  });
+  cards.forEach((card, index) => {
+    if (card.id || ids.has(card) || !card.answer) return;
     const hash = answerHash(card.answer);
-    const index = available.findIndex((old) => format.mode === "single" || old.question === card.question
-      || (card.answer !== "" && old.answerHash === hash));
-    if (index >= 0) ids.set(card, available.splice(index, 1)[0]!.id);
+    const first = available.findIndex(({ record }) => record.answerHash === hash);
+    if (first >= 0 && !available.some(({ record }, candidate) => candidate > first && record.answerHash === hash)) {
+      claim(card, index, first);
+    }
+  });
+
+  // A rewritten question can occupy the same gap between surviving UUIDs.
+  const nextAnchor: number[] = [];
+  let upper = previous.length;
+  for (let index = cards.length - 1; index >= 0; index--) {
+    nextAnchor[index] = upper;
+    upper = anchors.get(index) ?? upper;
   }
+  let lower = -1;
+  cards.forEach((card, index) => {
+    if (!card.id && !ids.has(card)) {
+      claim(card, index, available.findIndex((old) => old.index > lower && old.index < nextAnchor[index]!));
+    }
+    lower = anchors.get(index) ?? lower;
+  });
   return ids;
 }
 
@@ -194,7 +225,7 @@ export class StudyCards {
   }
 
   private formats(note: MarkdownNote, defaults: Format[]) {
-    const known = Object.hasOwn(this.data.knownNotes, note.path) ? this.data.knownNotes[note.path] : undefined;
+    const known = this.data.knownNotes[note.path];
     if (known) return [note.format(known.format)];
     const formats: Format[] = [];
     for (const fallback of defaults) {
@@ -236,20 +267,9 @@ export class StudyCards {
 
   private indexNote(note: MarkdownNote, format: Format, sections: string[], error?: string) {
     const path = note.path;
-    const known = Object.hasOwn(this.data.knownNotes, path) ? this.data.knownNotes[path] : undefined;
+    const known = this.data.knownNotes[path];
     const cards = error ? [] : note.cards(format);
     const missing = previousIds(cards, known, format);
-    const indexed = this.index.get(path);
-    if (indexed?.note.source === note.source && sameFormat(indexed.format, format) && indexed.error === error
-      && sections.length === indexed.sections.length && sections.every((section) => indexed.sections.includes(section))) return;
-    this.index.set(path, {
-      note, format, sections, error,
-      cards: cards.map((card, index) => ({
-        ...card, path, index,
-        identity: card.id ? "valid" : card.invalidId ? "invalid" : "missing",
-      })),
-    });
-    this.revision++;
     if (!error && !this.vault.hasUnsavedChanges(path, note.source)) {
       const records = cards.flatMap((card) => {
         const id = card.id ?? missing.get(card);
@@ -257,6 +277,18 @@ export class StudyCards {
       });
       this.data.knownNotes[path] = { format, cards: records };
     }
+    const indexed = this.index.get(path);
+    if (indexed?.note.source === note.source && sameFormat(indexed.format, format) && indexed.error === error
+      && sections.length === indexed.sections.length && sections.every((section) => indexed.sections.includes(section))) return;
+    this.index.set(path, {
+      note, format, sections, error,
+      cards: cards.map((card, index) => ({
+        ...card, path, index,
+        line: note.lineAt(card.from),
+        identity: card.id ? "valid" : card.invalidId ? "invalid" : "missing",
+      })),
+    });
+    this.revision++;
   }
 
   private removeFromIndex(path: string) {
@@ -281,7 +313,7 @@ export class StudyCards {
       this.indexNote(note, format, sections, note.error ?? "Выберите формат в предпросмотре подключения");
       return;
     }
-    const known = Object.hasOwn(this.data.knownNotes, path) ? this.data.knownNotes[path] : undefined;
+    const known = this.data.knownNotes[path];
     if (autoAssign && !this.vault.hasUnsavedChanges(path, note.source)) {
       const assign = this.assign(note, format, known);
       const planned = note.enroll(format, assign);
@@ -320,15 +352,14 @@ export class StudyCards {
     return this.run(async () => {
       for (const section of this.data.sections) {
         for (const source of section.sources) {
-          source.path = samePath(source.path, oldPath, newPath);
-          source.excluded = source.excluded.map((path) => samePath(path, oldPath, newPath));
+          source.path = remapPath(source.path, oldPath, newPath);
+          source.excluded = source.excluded.map((path) => remapPath(path, oldPath, newPath));
         }
       }
       for (const path of Object.keys(this.data.knownNotes)) {
         if (!hasPath(path, oldPath)) continue;
-        if (/\.md$/i.test(samePath(path, oldPath, newPath))) {
-          this.data.knownNotes[samePath(path, oldPath, newPath)] = this.data.knownNotes[path]!;
-        }
+        const moved = remapPath(path, oldPath, newPath);
+        if (/\.md$/i.test(moved)) this.data.knownNotes[moved] = this.data.knownNotes[path]!;
         delete this.data.knownNotes[path];
       }
       for (const path of this.index.keys()) if (hasPath(path, oldPath)) this.removeFromIndex(path);
@@ -393,7 +424,7 @@ export class StudyCards {
       if (!note || note.source !== entry.note.source || this.vault.hasUnsavedChanges(current.path, note.source)) {
         throw new ChangedNote(current.path);
       }
-      this.data.progress[current.id] = progress;
+      this.data.progress[current.id] = { ...this.data.progress[current.id], ...progress };
     });
   }
 
@@ -461,6 +492,7 @@ export class StudyCards {
     previous: PlannedRow[] = [], affected?: ReadonlySet<string>) {
     const paths = this.vault.markdownFiles().sort((a, b) => a.localeCompare(b));
     const rows: PlannedRow[] = [];
+    const changedPaths = affected ? [...affected] : [];
     const cached = new Map<string, PlannedRow[]>();
     for (const row of previous) {
       const found = cached.get(row.path);
@@ -471,7 +503,7 @@ export class StudyCards {
       const sources = requests.flatMap((request, index) => includesPath(request, path) ? [index] : []);
       if (!sources.length) continue;
       const unchanged = cached.get(path);
-      if (affected && !affected.has(path) && unchanged && unchanged.length === sources.length
+      if (affected && !changedPaths.some((changed) => hasPath(path, changed)) && unchanged && unchanged.length === sources.length
         && unchanged.every(({ source }) => sources.includes(source))) {
         rows.push(...unchanged);
         continue;
@@ -498,14 +530,14 @@ export class StudyCards {
         const formats = this.formats(note, defaults.length ? defaults : [requests[source]!.format ?? single]);
         const choiceFormat = chosen ?? choice.format;
         const selected = formats.find((item) => choiceFormat && sameFormat(item, choiceFormat));
-        const cards = note.error ? [] : note.cards(selected ?? formats[0]!);
-        const lines = cards.map(({ from, to }) => ({
-          first: note.lineAt(from),
-          last: note.lineAt(Math.max(from, to - 1)),
+        const cards = note.error ? [] : note.cards(selected ?? formats[0]!).map((card) => ({
+          ...card,
+          firstLine: note.lineAt(card.from),
+          lastLine: note.lineAt(Math.max(card.from, card.to - 1)),
         }));
         rows.push({
           path, source, checked, format: selected ?? formats[0]!, formats, needsFormat: formats.length > 1 && !selected,
-          cards, lines, text: note.source, error: note.error, dirty, excluded,
+          cards, text: note.source, error: note.error, dirty, excluded,
         });
       }
     }
@@ -522,11 +554,12 @@ export class StudyCards {
     const baseline = new Map(rows.map((row) => [key(row), row]));
     for (const row of latest) {
       const old = baseline.get(key(row));
-      if (!old || old.text !== row.text || old.checked !== row.checked || old.excluded !== row.excluded || !sameFormat(old.format, row.format)
-        || (row.checked && (row.dirty || row.error || row.needsFormat))) stale.add(row.path);
+      if (old && (old.checked !== row.checked || old.excluded !== row.excluded)) stale.add(row.path);
+      if (row.checked && (!old || old.text !== row.text || !sameFormat(old.format, row.format)
+        || row.dirty || row.error || row.needsFormat)) stale.add(row.path);
       baseline.delete(key(row));
     }
-    for (const row of baseline.values()) stale.add(row.path);
+    for (const row of baseline.values()) if (row.checked || row.excluded) stale.add(row.path);
     if (stale.size) return { confirmed: false, paths: [...stale] } as const;
 
     const eligible = new Map(latest.filter(({ checked }) => checked).map((row) => [row.path, row]));
@@ -534,7 +567,7 @@ export class StudyCards {
       const note = new MarkdownNote(row.path, row.text);
       try {
         await this.write(note, (current) => current.enroll(row.format,
-          this.assign(current, row.format, Object.hasOwn(this.data.knownNotes, row.path) ? this.data.knownNotes[row.path] : undefined)));
+          this.assign(current, row.format, this.data.knownNotes[row.path])));
       } catch (error) {
         if (!(error instanceof ChangedNote) && this.vault.markdownFiles().includes(row.path)) throw error;
         stale.add(row.path);
@@ -580,6 +613,8 @@ export class EnrollmentPreview {
 
   private choice = (source: number, path: string) => this.choices.get(source)?.get(path) ?? {};
 
+  get sources(): readonly SourceRequest[] { return this.requests; }
+
   choose(source: number, path: string, choice: Choice) {
     let notes = this.choices.get(source);
     if (!notes) this.choices.set(source, notes = new Map());
@@ -587,12 +622,12 @@ export class EnrollmentPreview {
   }
 
   rename(oldPath: string, newPath: string) {
-    for (const request of this.requests) request.path = samePath(request.path, oldPath, newPath);
+    for (const request of this.requests) request.path = remapPath(request.path, oldPath, newPath);
     for (const notes of this.choices.values()) {
       for (const [path, choice] of [...notes]) {
         if (!hasPath(path, oldPath)) continue;
         notes.delete(path);
-        notes.set(samePath(path, oldPath, newPath), choice);
+        notes.set(remapPath(path, oldPath, newPath), choice);
       }
     }
   }

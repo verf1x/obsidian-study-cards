@@ -2,7 +2,7 @@ import { FuzzySuggestModal, Modal, Notice, TFile, TFolder, type App, type TAbstr
 import { single, type Format } from "./markdown";
 import { type EnrollmentPreview, type PreviewRow, type SourceRequest, type StudyCards } from "./study-cards";
 
-export type VaultChange = { path: string; oldPath?: string; folder?: boolean };
+export type VaultChange = { path: string; oldPath?: string };
 export type WatchVault = (listener: (change: VaultChange) => void) => () => void;
 
 export function message(error: unknown) {
@@ -132,7 +132,7 @@ class PreviewModal extends Modal {
   private openNow = false;
 
   constructor(app: App, study: StudyCards, private readonly watch: WatchVault, section: string,
-    private readonly sources: SourceRequest[]) {
+    sources: SourceRequest[]) {
     super(app);
     this.preview = study.preview(section, sources);
   }
@@ -145,17 +145,12 @@ class PreviewModal extends Modal {
     this.feedback = this.contentEl.createEl("p", { attr: { role: "status" } });
     this.confirm = this.contentEl.createEl("button", { text: "Подключить", cls: "mod-cta" });
     this.confirm.onclick = () => { void this.submit(); };
-    this.unsubscribe = this.watch(({ path, oldPath, folder }) => {
+    this.unsubscribe = this.watch(({ path, oldPath }) => {
       if (oldPath) {
         this.preview.rename(oldPath, path);
-        for (const source of this.sources) {
-          if (source.path === oldPath || source.path.startsWith(oldPath + "/")) {
-            source.path = path + source.path.slice(oldPath.length);
-          }
-        }
+        this.pending.add(oldPath);
       }
-      if (folder || oldPath) this.refreshAll = true;
-      else this.pending.add(path);
+      this.pending.add(path);
       void this.refresh();
     });
     void this.refresh();
@@ -207,7 +202,7 @@ class PreviewModal extends Modal {
     const expanded = new Set([...this.list.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-row")));
     const focused = this.list.querySelector(":focus")?.getAttribute("data-focus");
     this.list.empty();
-    for (const [index, source] of this.sources.entries()) {
+    for (const [index, source] of this.preview.sources.entries()) {
       const group = this.list.createDiv({ cls: "study-cards-item" });
       const items = rows.filter((row) => row.source === index);
       group.createEl("h4", { text: pathName(source.path) });
@@ -241,14 +236,13 @@ class PreviewModal extends Modal {
         details.open = expanded.has(key);
         details.createEl("summary", { text: formatName(row.format) });
         const cards = details.createEl("ul");
-        row.cards.forEach(({ question }, cardIndex) => {
-          const lines = row.lines[cardIndex]!;
-          cards.createEl("li", { text: lines.first + "–" + lines.last + " · " + question });
+        row.cards.forEach(({ question, firstLine, lastLine }) => {
+          cards.createEl("li", { text: firstLine + "–" + lastLine + " · " + question });
         });
       }
     }
     this.confirm.disabled = rows.some((row) => row.checked && (row.dirty || row.error || row.needsFormat))
-      || (!this.sources.some(({ kind }) => kind === "folder") && !rows.some(({ checked }) => checked));
+      || (!this.preview.sources.some(({ kind }) => kind === "folder") && !rows.some(({ checked }) => checked));
   }
 }
 

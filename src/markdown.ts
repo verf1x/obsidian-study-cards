@@ -31,8 +31,8 @@ markdown.block.ruler.before("heading", "obsidian_comment", (state, start, end, s
 const uuid = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 const statusPrefix = "qcards/status/";
 const statusTag = /^(?:#)?qcards\/status(?:\/[\p{L}\p{N}_/-]*)?$/iu;
-const collectionId = /^[ \t]*<!--[ \t]*qcards:id[ \t]*=[ \t]*(.*?)[ \t]*-->[ \t]*(?:\r?\n|$)/i;
-const tagLine = /^[ \t]*(#[\p{L}\p{N}_/-]+(?:[ \t]+#[\p{L}\p{N}_/-]+)*)[ \t]*(?:\r?\n|$)/u;
+const collectionId = /^ {0,3}<!--[ \t]*qcards:id[ \t]*=[ \t]*(.*?)[ \t]*-->[ \t]*(?:\r?\n|$)/i;
+const tagLine = /^ {0,3}(#[\p{L}\p{N}_/-]+(?:[ \t]+#[\p{L}\p{N}_/-]+)*)[ \t]*(?:\r?\n|$)/u;
 
 interface Edit { from: number; to: number; text: string }
 interface Heading { level: number; question: string; from: number; after: number }
@@ -58,7 +58,7 @@ function readStatus(tags: string[]): MarkdownCard["status"] {
     .map((tag) => tag.replace(/^#/, "").toLowerCase().slice(statusPrefix.length)));
   if (!values.size) return "new";
   const [status] = values;
-  return values.size === 1 && status && Object.hasOwn(statuses, status) ? status as Status : "invalid";
+  return values.size === 1 && (status === "new" || status === "studied" || status === "mastered") ? status : "invalid";
 }
 
 function yamlValue(value: unknown) {
@@ -67,6 +67,10 @@ function yamlValue(value: unknown) {
 
 function tagTokens(value: unknown) {
   return typeof value === "string" ? value.split(/[\s,]+/).filter(Boolean) : [];
+}
+
+function trimBlankLines(markdown: string) {
+  return markdown.replace(/^(?:[ \t]*\r?\n)+|(?:\r?\n[ \t]*)+$/g, "");
 }
 
 export function sameFormat(left: Format, right: Format) {
@@ -154,8 +158,8 @@ export class MarkdownNote {
       const heading = format.question === "heading" ? headings.find(({ level }) => level === 1) : undefined;
       const id = this.properties?.get("qcards_id");
       return [{
-        question: heading?.question ?? this.path.split("/").at(-1)!.slice(0, -3),
-        answer: this.source.slice(heading?.after ?? this.bodyStart).trim(),
+        question: heading?.question ?? this.path.slice(this.path.lastIndexOf("/") + 1, -3),
+        answer: trimBlankLines(this.source.slice(heading?.after ?? this.bodyStart)),
         from: heading?.from ?? this.bodyStart,
         to: this.source.length,
         id: typeof id === "string" && uuid.test(id) ? id.toLowerCase() : null,
@@ -172,7 +176,7 @@ export class MarkdownNote {
       const otherTags = tags.filter((tag) => !statusTag.test(tag));
       return {
         question: heading.question,
-        answer: (otherTags.length ? otherTags.join(" ") + this.eol + content : content).trim(),
+        answer: trimBlankLines(otherTags.length ? otherTags.join(" ") + this.eol + content : content),
         from: heading.from,
         to,
         id: validId ? rawId.toLowerCase() : null,
@@ -288,7 +292,9 @@ export class MarkdownNote {
       } else {
         const block = added.join(this.eol) + this.eol;
         const text = this.bodyStart === this.bom ? "---" + this.eol + block + "---" + this.eol : block;
-        edits.push({ from: this.yamlEnd, to: this.yamlEnd, text });
+        const documentEnd = /^\.\.\.[ \t]*(?:#.*)?\r?$/m.exec(this.source.slice(this.yamlStart, this.yamlEnd));
+        const at = documentEnd ? this.yamlStart + documentEnd.index : this.yamlEnd;
+        edits.push({ from: at, to: at, text });
       }
     }
     return apply(this.source, edits);

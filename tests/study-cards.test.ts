@@ -139,6 +139,7 @@ test("обновляет предпросмотр папки и сохраняе
   assert.ok(!study.cards(section).some(({ question }) => question === "Вопрос"));
   const recursive = study.preview(section, [{ kind: "folder", path: "Курс", recursive: true, format: collection }]);
   await recursive.refresh();
+  await vault.edit("Курс/Обычная.md", "## Отредактированный черновик\n");
   assert.deepEqual(await recursive.confirm(), { confirmed: true });
   assert.ok(study.cards(section).some(({ question }) => question === "Вложенный вопрос"));
 });
@@ -309,7 +310,8 @@ test("показывает пропавший UUID после перезапус
   const card = study.cards(section)[0]!;
   const original = await vault.files.read(path);
   await study.saveProgress(card, { history: [1] });
-  await vault.edit(path, original.replace(/<!-- qcards:id=.* -->\n/, "").replace("## Вопрос", "## Уточнённый вопрос"));
+  await vault.edit(path, original.replace(/<!-- qcards:id=.* -->\n/, "")
+    .replace("## Вопрос", "## Уточнённый вопрос").replace("Ответ", "Переписанный ответ"));
   study = vault.open();
   await study.scan();
   let missing = study.cards(section)[0]!;
@@ -377,4 +379,51 @@ test("читает статус каждой секции и сохраняет 
   assert.equal(study.cards(section)[0]?.status, "mastered");
   assert.equal(study.cards(section)[1]?.status, "new");
   assert.ok((await vault.files.read(path)).includes("#тема #qcards/status/mastered"));
+});
+
+test("сохраняет индентированный код в ответе и при смене статуса", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = vault.open();
+  const section = await study.addSection("Код");
+  const path = await study.createCard(section, "Коллекция", "", { mode: "collection", level: 2 }, false);
+  const code = "    #qcards/status/studied\n    kept as code";
+  await vault.edit(path, (await vault.files.read(path)) + "## Вопрос\n\n" + code + "\n");
+  await study.update(path);
+  const [card] = study.cards(section);
+  assert.equal(card?.status, "new");
+  assert.equal(card.answer, code);
+  await study.setStatus(card, "mastered");
+  assert.equal(study.cards(section)[0]?.answer, code);
+  assert.equal(study.cards(section)[0]?.status, "mastered");
+  assert.ok((await vault.files.read(path)).includes(code));
+});
+
+test("вставляет свойства перед концом YAML-документа и сохраняет переставленные UUID", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = vault.open();
+  const section = await study.addSection("Темы");
+  const path = "Конспект.md";
+  const first = "## Первый\nПервый ответ\n";
+  const second = "## Второй\nВторой ответ\n";
+  await vault.files.create(path, "---\ntitle: 'Конспект' # оставить\n... # конец YAML\n---\n" + first + "\n" + second);
+  const preview = study.preview(section, [{ kind: "file", path, format: { mode: "collection", level: 2 } }]);
+  await preview.refresh();
+  assert.deepEqual(await preview.confirm(), { confirmed: true });
+  const [firstCard, secondCard] = study.cards(section);
+  assert.ok(firstCard?.id);
+  assert.ok(secondCard?.id);
+  await study.saveProgress(firstCard, { history: [1] });
+  const content = await vault.files.read(path);
+  assert.ok(content.includes("title: 'Конспект' # оставить\n"));
+  const [props, firstSection, secondSection] = content.split(/(?=^## )/m) as [string, string, string];
+  assert.ok(props.endsWith("... # конец YAML\n---\n"));
+  await vault.edit(path, props + secondSection + "\n" + firstSection.replace("## Первый", "## Уточнённый"));
+  await study.update(path);
+  const [a, b] = study.cards(section);
+  assert.equal(a?.id, secondCard.id);
+  assert.equal(b?.id, firstCard.id);
+  assert.equal(b.question, "Уточнённый");
+  assert.deepEqual(b.progress?.history, [1]);
 });

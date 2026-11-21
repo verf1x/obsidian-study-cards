@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile, TFolder, type TAbstractFile } from "obsidian";
+import { Notice, Plugin, TFile, type TAbstractFile } from "obsidian";
 import { studyVault } from "./obsidian-vault";
 import { message, SelectSourcesModal, sourceRequest, type VaultChange, type WatchVault } from "./source-modals";
 import { StudyCards, type SourceRequest } from "./study-cards";
@@ -42,10 +42,10 @@ export default class StudyCardsPlugin extends Plugin {
       this.registerEvent(this.app.vault.on("modify", update));
       this.registerEvent(this.app.metadataCache.on("changed", update));
       this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-        this.changed({ path: file.path, oldPath, folder: file instanceof TFolder }, this.study.rename(oldPath, file.path));
+        this.changed({ path: file.path, oldPath }, this.study.rename(oldPath, file.path));
       }));
       this.registerEvent(this.app.vault.on("delete", (file) => {
-        this.changed({ path: file.path, folder: file instanceof TFolder }, this.study.delete(file.path));
+        this.changed({ path: file.path }, this.study.delete(file.path));
       }));
       this.registerEvent(this.app.workspace.on("editor-change", (_editor, info) => {
         if (info.file) this.notify({ path: info.file.path });
