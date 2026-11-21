@@ -1,8 +1,8 @@
 import { DefaultScheduler, Rating, State } from "ts-fsrs";
-import { isReviewCard, reviewDue, reviewQueue, type ReviewCard } from "./interval-queue";
-import type { StudyCards } from "./study-cards";
+import { reviewDue, reviewQueue, type ReviewCard } from "./interval-queue";
+import type { ProgressMutation, StudyCards } from "./study-cards";
 import { isDate, record, type ReviewGrade } from "./study-state";
-import { StaleStudyState, type StudyMutation } from "./study-storage";
+import { StaleStudyState } from "./study-storage";
 
 const ratings = { again: Rating.Again, hard: Rating.Hard, good: Rating.Good, easy: Rating.Easy } as const;
 type Scheduler = DefaultScheduler<"FSRS-7">;
@@ -40,7 +40,6 @@ function restoreCard(card: ReviewCard, scheduler: Scheduler, now: Date): Schedul
 
 export interface ReviewQuestion { card: ReviewCard; revision: string | null }
 type UndoTarget = NonNullable<ReturnType<StudyCards["latestIntervalReview"]>>;
-type Intent = Pick<StudyMutation, "id" | "revision">;
 
 export class IntervalSession {
   private currentId?: string;
@@ -51,18 +50,17 @@ export class IntervalSession {
     private readonly id = globalThis.crypto.randomUUID()) {}
 
   static async start(study: StudyCards, sectionId: string, clock = () => new Date()) {
-    const cardIds = new Set(study.cards(sectionId).filter(isReviewCard).map(({ id }) => id));
+    const cardIds = new Set(study.intervalCards(sectionId).map(({ id }) => id));
     return new IntervalSession(study, sectionId, cardIds, await loadScheduler(), clock);
   }
 
-  read() {
-    const cards = this.study.sections.some(({ id }) => id === this.sectionId)
-      ? this.study.cards(this.sectionId, "source").filter(isReviewCard).filter(({ id }) => this.cardIds.has(id)) : [];
+  refreshQuestion() {
+    const cards = this.study.intervalCards(this.sectionId, "source").filter(({ id }) => this.cardIds.has(id));
     const { ready, nextDue } = reviewQueue(cards, this.clock());
     const card = ready.find(({ id }) => id === this.currentId) ?? ready[0];
     this.currentId = card?.id;
     const question: ReviewQuestion | undefined = card && { card, revision: this.study.progressRevision };
-    return { question, nextDue, undo: this.study.latestIntervalReview(this.id) };
+    return { question, nextDue, available: ready.length, undo: this.study.latestIntervalReview(this.id) };
   }
 
   intervals({ card }: ReviewQuestion): Record<ReviewGrade, number> {
@@ -75,7 +73,8 @@ export class IntervalSession {
 
   grade({ card, revision }: ReviewQuestion, grade: ReviewGrade) {
     if (card.id !== this.currentId) return Promise.reject(new StaleStudyState());
-    return this.write(revision, ["grade", card.id, grade], (mutation) => {
+    const action = ["grade", grade, card.id, card.path, card.index, card.status, card.question, card.answer];
+    return this.write(revision, action, (mutation) => {
       const now = this.clock();
       const { card: updated } = this.scheduler.review({
         card: restoreCard(card, this.scheduler, now), grade: ratings[grade], now,
@@ -96,7 +95,8 @@ export class IntervalSession {
     });
   }
 
-  private async write(revision: string | null, action: string[], prepare: (mutation: Intent) => () => Promise<void>) {
+  private async write(revision: string | null, action: (string | number)[],
+    prepare: (mutation: ProgressMutation) => () => Promise<void>) {
     const key = JSON.stringify([revision, ...action]);
     if (this.retry?.pending && this.retry.key !== key) throw new StaleStudyState();
     const retry = this.retry?.key === key ? this.retry : {

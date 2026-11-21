@@ -16,7 +16,7 @@ export interface StudyVault {
 
 export type { CardProgress, Source, SourceRequest } from "./study-state";
 
-type ProgressMutation = Pick<StudyMutation, "id" | "revision">;
+export type ProgressMutation = Pick<StudyMutation, "id" | "revision">;
 
 interface IndexedNote {
   note: MarkdownNote;
@@ -474,6 +474,14 @@ export class StudyCards {
     return this.sectionCards(sectionId, order, this.catalog.data, this.catalog.index);
   }
 
+  intervalCards(sectionId: string | null, order?: "source") {
+    if (sectionId !== null && !this.sections.some(({ id }) => id === sectionId)) return [];
+    const { data, index } = this.catalog;
+    const cards = sectionId === null ? this.allCards(data, index) : this.cards(sectionId, order);
+    const files = new Set(this.vault.markdownFiles());
+    return cards.filter(isReviewCard).filter(({ path }) => files.has(path));
+  }
+
   private sectionCards(sectionId: string, order?: "source", data = this.data, index = this.index) {
     const cards = this.allCards(data, index).filter((card) => index.get(card.path)?.sections.includes(sectionId));
     if (order !== "source") return cards;
@@ -573,25 +581,26 @@ export class StudyCards {
     return last;
   }
 
-  latestIntervalReview(sessionId: string) {
-    const { data } = this.catalog;
+  private reviewToUndo(sessionId: string, data: StudyData) {
     const last = this.lastReview(sessionId, data);
     if (!last) return;
-    const reviews = data.progress[last.uuid]?.reviews;
-    if (reviews?.[reviews.length - 1]?.id === last.review.id) {
-      return { uuid: last.uuid, reviewId: last.review.id, revision: this.progressRevision };
-    }
+    const progress = data.progress[last.uuid]!;
+    const reviews = progress.reviews;
+    if (reviews?.[reviews.length - 1]?.id === last.review.id) return { ...last, progress, reviews };
+  }
+
+  latestIntervalReview(sessionId: string) {
+    const last = this.reviewToUndo(sessionId, this.catalog.data);
+    if (last) return { uuid: last.uuid, reviewId: last.review.id, revision: this.progressRevision };
   }
 
   intervalStatistics(sectionId: string | null, now: Date) {
-    const { data, index } = this.catalog;
-    const cards = sectionId === null ? this.allCards(data, index) : this.cards(sectionId);
-    const { ready, nextDue } = reviewQueue(cards.filter(isReviewCard), now);
+    const { ready, nextDue } = reviewQueue(this.intervalCards(sectionId), now);
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
     const reviewed = new Set<string>();
     let reviews = 0;
-    for (const [uuid, progress] of Object.entries(data.progress)) {
+    for (const [uuid, progress] of Object.entries(this.catalog.data.progress)) {
       for (const review of progress.reviews ?? []) {
         const at = Date.parse(review.at);
         if ((sectionId === null || sectionId === review.sectionId) && at >= today && at < tomorrow) {
@@ -600,17 +609,16 @@ export class StudyCards {
         }
       }
     }
-    return { available: ready.length, cards: reviewed.size, reviews, ...(nextDue && { nextDue }) };
+    return { available: ready.length, cards: reviewed.size, reviews, nextDue, dayEndsAt: tomorrow };
   }
 
   undoReview(mutation: ProgressMutation, uuid: string, sessionId: string, reviewId: string) {
     return this.run("Отмена интервальной оценки", async () => {
-      const prior = this.data.progress[uuid];
-      const latest = prior?.reviews?.[prior.reviews.length - 1];
-      if (!prior?.reviews || !latest || latest.id !== reviewId || this.lastReview(sessionId, this.data)?.review.id !== reviewId) {
-        throw new StaleStudyState();
-      }
-      this.data.progress[uuid] = { ...prior, schedule: latest.previousSchedule, reviews: prior.reviews.slice(0, -1) };
+      const last = this.reviewToUndo(sessionId, this.data);
+      if (last?.uuid !== uuid || last.review.id !== reviewId) throw new StaleStudyState();
+      this.data.progress[uuid] = {
+        ...last.progress, schedule: last.review.previousSchedule, reviews: last.reviews.slice(0, -1),
+      };
     }, { mutation });
   }
 

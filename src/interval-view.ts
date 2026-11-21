@@ -70,7 +70,7 @@ export class IntervalView {
     totals.open = opened.has("interval-statistics");
     totals.createEl("summary", { text: "Повторения во всех учебных разделах" });
     this.renderStatistics(totals, all);
-    this.updateAt(now, section.nextDue, all.nextDue);
+    this.updateAt(all.dayEndsAt, all.nextDue);
   }
 
   renderCardAction(root: HTMLElement, card: Card) {
@@ -93,11 +93,10 @@ export class IntervalView {
       this.close();
       return false;
     }
-    const { question, undo, nextDue } = session.read();
+    const { question, undo, available, nextDue } = session.refreshQuestion();
     if (!question || !sameQuestion(this.revealed, question)) this.revealed = undefined;
-    const now = new Date();
-    const stats = this.study.intervalStatistics(section.id, now);
-    this.updateAt(now, nextDue, stats.nextDue);
+    const stats = this.study.intervalStatistics(section.id, new Date());
+    this.updateAt(stats.dayEndsAt, nextDue);
 
     const panel = root.createDiv({ cls: "study-cards-interval-panel", attr: { "aria-label": "Интервальное повторение" } });
     const header = panel.createDiv({ cls: "study-cards-controls study-cards-interval-header" });
@@ -109,7 +108,7 @@ export class IntervalView {
       this.render();
       this.focus('[data-focus="interval-start"]');
     };
-    this.renderStatistics(panel, stats);
+    this.renderStatistics(panel, { ...stats, available });
 
     const body = panel.createDiv({ cls: "study-cards-interval-body" });
     body.createEl("h2", {
@@ -162,9 +161,8 @@ export class IntervalView {
     }
   }
 
-  private updateAt(now: Date, ...dates: (Date | undefined)[]) {
-    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
-    const next = Math.min(midnight, ...dates.map((date) => date?.getTime() ?? Infinity));
+  private updateAt(dayEndsAt: number, nextDue: Date | undefined) {
+    const next = Math.min(dayEndsAt, nextDue?.getTime() ?? Infinity);
     this.timer = setTimeout(this.render, Math.max(0, next - Date.now()));
   }
 
