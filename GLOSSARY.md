@@ -42,6 +42,10 @@ A mode for getting familiar with cards. The user reads the answers and can chang
 
 A mode in which the user answers a selection of questions, grades their own answers, and can retry mistakes. Results appear in the free check history.
 
+**Last manual selection**
+
+The set of cards from the most recently launched free check using manual selection in a study section.
+
 **Free check result**
 
 The confirmed outcome of a session, including answer grades and the number of ungraded questions.
@@ -125,6 +129,10 @@ _Избегать_: оценка ответа, состояние FSRS.
 **Свободная проверка**
 
 Режим с выборкой вопросов, самостоятельной оценкой ответа и возможностью повторить ошибки. Его результаты идут в историю свободных проверок.
+
+**Последний ручной набор**
+
+Набор карточек из последней свободной проверки учебного раздела, запущенной с ручным выбором.
 
 **Результат свободной проверки**
 
