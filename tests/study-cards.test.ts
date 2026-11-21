@@ -625,3 +625,57 @@ test("свободная проверка сохраняет исправлен�
   assert.equal(study.progress.freeSession, null);
   assert.equal(study.progress.freeResults.length, 1);
 });
+
+test("свободная проверка выбирает вопросы по порядку источников и сохраняет границу открытых вопросов", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const collection = { mode: "collection", level: 2 } as const;
+  const marked = "---\nqcards_source: true\n---\n";
+  const path = "Материалы/B/Коллекция.md";
+  await vault.files.create(path, marked + "## Третий\nОтвет\n\n## Четвёртый\nОтвет\n");
+  await vault.files.create("Материалы/A/Карточка.md", marked + "# Второй\nОтвет\n");
+  await vault.files.create("Явный источник.md", "# Первый\nОтвет\n");
+  let study = await vault.open();
+  const sectionId = await study.addSection("Раздел");
+  const preview = study.preview(sectionId, [
+    { kind: "file", path: "Явный источник.md" },
+    { kind: "folder", path: "Материалы", recursive: true },
+    { kind: "file", path, format: collection },
+  ]);
+  await preview.refresh();
+  preview.choose(1, path, { format: collection });
+  await preview.refresh();
+  assert.deepEqual(await preview.confirm(), { confirmed: true });
+  const mutation = () => ({ id: randomUUID(), revision: study.freeChecks.revision });
+  const start = study.cards(sectionId).find(({ question }) => question === "Второй")!.id!;
+  const startedAt = "2026-11-21T10:00:00Z";
+
+  const first = mutation();
+  await study.startFreeCheck(first, null, { sectionId, start, count: 3, order: "standard" }, startedAt);
+  assert.deepEqual(study.freeCheckQuestions().map(({ card }) => card?.question), ["Второй", "Третий", "Четвёртый"]);
+  await assert.rejects(study.moveFreeCheck(mutation(), first.id, 1), /Оцените текущий ответ/);
+  await assert.rejects(study.startFreeCheck(mutation(), first.id, { sectionId, start, count: 4, order: "standard" }, startedAt),
+    /Изменилось количество/);
+  assert.equal(study.freeChecks.session?.id, first.id);
+
+  const single = "Материалы/A/Карточка.md";
+  const saved = await vault.files.read(single);
+  await vault.delete(single);
+  await study.delete(single);
+  await study.moveFreeCheck(mutation(), first.id, 1);
+  await study.moveFreeCheck(mutation(), first.id, -1);
+  await vault.files.create(single, saved);
+  study = await vault.open();
+  await study.scan();
+  assert.equal(study.freeCheckQuestions()[0]?.card?.question, "Второй");
+  await study.moveFreeCheck(mutation(), first.id, 1);
+  assert.equal(study.freeChecks.session?.position, 1);
+  await assert.rejects(study.moveFreeCheck(mutation(), first.id, 1), /Оцените текущий ответ/);
+  const [restored, current] = study.freeCheckQuestions();
+  await assert.rejects(study.gradeFreeCheck(mutation(), first.id, restored!.card!, "correct"), /изменились/);
+  await study.gradeFreeCheck(mutation(), first.id, current!.card!, "incorrect");
+  await study.gradeFreeCheck(mutation(), first.id, current!.card!, "correct");
+  assert.equal(study.freeCheckQuestions()[1]?.grade, "correct");
+  await study.moveFreeCheck(mutation(), first.id, 1);
+  assert.equal(study.freeChecks.session?.position, 2);
+});

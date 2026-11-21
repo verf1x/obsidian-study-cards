@@ -52,8 +52,15 @@ interface FreeCheck {
   retryOf: string | null;
 }
 
-export interface FreeSession extends FreeCheck { position: number }
-export interface FreeResult extends FreeCheck { finishedAt: string }
+export interface FreeSession extends FreeCheck {
+  position: number;
+  furthestPosition?: number;
+}
+
+export interface FreeResult extends FreeCheck {
+  finishedAt: string;
+  ungradedUnavailable?: number;
+}
 
 export interface StudyData {
   sections: Section[];
@@ -119,11 +126,16 @@ function freeCheck(value: unknown): value is FreeCheck {
 
 function freeSession(value: unknown): value is FreeSession {
   return record(value) && Number.isInteger(value.position) && Number(value.position) >= 0
-    && freeCheck(value) && Number(value.position) < value.cardIds.length;
+    && freeCheck(value) && Number(value.position) < value.cardIds.length
+    && (value.furthestPosition === undefined || (Number.isInteger(value.furthestPosition)
+      && Number(value.furthestPosition) >= Number(value.position) && Number(value.furthestPosition) < value.cardIds.length));
 }
 
 function freeResult(value: unknown): value is FreeResult {
-  return record(value) && isDate(value.finishedAt) && freeCheck(value) && Object.keys(value.grades).length > 0;
+  if (!record(value) || !isDate(value.finishedAt) || !freeCheck(value)) return false;
+  const graded = Object.keys(value.grades).length;
+  return graded > 0 && (value.ungradedUnavailable === undefined || (Number.isInteger(value.ungradedUnavailable)
+    && Number(value.ungradedUnavailable) >= 0 && Number(value.ungradedUnavailable) <= value.cardIds.length - graded));
 }
 
 export function validStudyData(value: unknown): value is StudyData {
