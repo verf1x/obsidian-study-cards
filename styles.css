@@ -9,11 +9,21 @@
   margin-block: 0.75rem;
 }
 
+.study-cards-view:has(> :is(.study-cards-free-panel, .study-cards-interval-panel)) {
+  display: flex;
+  flex-direction: column;
+}
+
+.is-mobile .study-cards-view {
+  padding-block-end: calc(var(--navbar-height, var(--mobile-toolbar-height, 52px))
+    + var(--navbar-bottom-offset, var(--safe-area-inset-bottom, 0px)) + 0.5rem);
+}
+
 :is(.study-cards-free-panel, .study-cards-interval-panel) {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
-  height: 100%;
 }
 
 :is(.study-cards-free-header, .study-cards-interval-header) {

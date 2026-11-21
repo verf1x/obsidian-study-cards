@@ -191,10 +191,12 @@ export class StudyView extends ItemView {
     if (includeExtraActions) this.renderCardActions(actions, card);
 
     void this.renderMarkdown(root.createDiv(), card);
+    const reviews = card.progress?.reviews;
     const legacySchedule = reviewDue(card) ? undefined : card.progress?.schedule;
-    if (card.progress?.history !== undefined || legacySchedule !== undefined) {
+    if (reviews?.length || card.progress?.history !== undefined || legacySchedule !== undefined) {
       const results = root.createEl("details");
       results.createEl("summary", { text: "Результаты и расписание" });
+      if (reviews?.length) this.interval.renderCardReviews(results, reviews);
       if (card.progress?.history !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.history, null, 2) });
       if (legacySchedule !== undefined) results.createEl("pre", { text: JSON.stringify(legacySchedule, null, 2) });
     }
