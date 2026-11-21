@@ -1,5 +1,5 @@
 import type { App } from "obsidian";
-import { sharedStudyPath, type StudyStorageIO } from "./study-storage";
+import { sharedStudyPath, SharedWriteNotApplied, type StudyStorageIO } from "./study-storage";
 
 const folder = "Study Cards";
 const deviceKey = "study-cards-device-storage";
@@ -36,22 +36,30 @@ export async function obsidianStudyStorage(app: App, onClose: (close: () => void
   return {
     readShared,
     async writeShared(expected, next) {
-      if (expected === null) {
-        if (!await adapter.exists(folder)) {
-          try {
-            await vault.createFolder(folder);
-          } catch (error) {
-            if (!await adapter.exists(folder)) throw error;
+      let publicationStarted = false;
+      try {
+        if (expected === null) {
+          if (!await adapter.exists(folder)) {
+            try {
+              await vault.createFolder(folder);
+            } catch (error) {
+              if (!await adapter.exists(folder)) throw error;
+            }
           }
+          if (await adapter.exists(sharedStudyPath)) throw new Error("Общий файл Study Cards уже появился.");
+          publicationStarted = true;
+          await vault.create(sharedStudyPath, next);
+          return;
         }
-        if (await adapter.exists(sharedStudyPath)) throw new Error("Общий файл Study Cards уже появился.");
-        await vault.create(sharedStudyPath, next);
-        return;
+        await adapter.process(sharedStudyPath, (actual) => {
+          if (actual !== expected) throw new Error("Общий файл Study Cards изменился.");
+          publicationStarted = true;
+          return next;
+        });
+      } catch (error) {
+        if (publicationStarted) throw error;
+        throw new SharedWriteNotApplied(error instanceof Error ? error.message : String(error));
       }
-      await adapter.process(sharedStudyPath, (actual) => {
-        if (actual !== expected) throw new Error("Общий файл Study Cards изменился.");
-        return next;
-      });
     },
     readDevice() {
       return new Promise((resolve, reject) => {
