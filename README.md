@@ -12,7 +12,7 @@ Create a study section and add Markdown files or folders. The preview shows whic
 
 ## Platform compatibility
 
-The [0.1.2 draft acceptance report](docs/acceptance/0.1.2.md) records local checks with Obsidian 1.15.1 on Windows 11, Arch Linux under WSL2 and Android 17 on a Pixel 8 Pro. The manifest currently declares Obsidian 1.8.7 as the provisional minimum. Study Cards can also be installed on macOS and iOS. Compatibility on those platforms is unverified.
+Study Cards 0.1.3 requires Obsidian 1.15.1. The [0.1.2 draft acceptance report](docs/acceptance/0.1.2.md) records local checks with Obsidian 1.15.1 on Windows 11, Arch Linux under WSL2 and Android 17 on a Pixel 8 Pro. Study Cards can also be installed on macOS and iOS. Compatibility on those platforms is unverified.
 
 ## Test vault
 
@@ -30,7 +30,7 @@ In an existing demo vault, connect `Материалы/Энтропия исто
 
 Study Cards stores shared progress in `Study Cards/data.json` inside the vault. Enable syncing of **Other file types** in Obsidian Sync and include the **Study Cards** folder. The last opened study section and recovery copies are stored on the device. If versions diverge, open the Study Cards tab to choose a version before making further changes.
 
-Expand **Данные Study Cards** in the tab to export a backup or preview and import one. Copy Markdown notes separately. If the import shows a source as **Недоступен**, use **Переподключить** to find it at its new path. Card progress follows the UUID in the note.
+Expand **Данные Study Cards** in the tab to export a backup or preview and import one. On mobile, the export is saved as a dated JSON file in the vault root. Copy Markdown notes separately. If the import shows a source as **Недоступен**, use **Переподключить** to find it at its new path. Card progress follows the UUID in the note.
 
 ## Contributing
 

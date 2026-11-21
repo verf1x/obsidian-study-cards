@@ -1,4 +1,4 @@
-import { Modal, Notice, type App } from "obsidian";
+import { Modal, Notice, Platform, type App } from "obsidian";
 import { message } from "./source-modals";
 import type { StudyCards } from "./study-cards";
 import { StaleStudyState, type ImportPreview, type SnapshotSummary } from "./study-storage";
@@ -20,8 +20,17 @@ function summary(root: HTMLElement, version: SnapshotSummary | null) {
   });
 }
 
-async function download(root: HTMLElement, snapshot: Promise<string>, filename: string) {
-  const url = URL.createObjectURL(new Blob([await snapshot], { type: "application/json" }));
+async function saveSnapshot(app: App, root: HTMLElement, snapshot: Promise<string>, filename: string) {
+  const data = await snapshot;
+  if (Platform.isMobile) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const path = filename.replace(/\.json$/, `-${timestamp}.json`);
+    const file = await app.vault.create(path, data);
+    new Notice(`Снимок сохранён в хранилище · ${file.path}`);
+    return;
+  }
+
+  const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
   const link = root.ownerDocument.createElement("a");
   link.href = url;
   link.download = filename;
@@ -79,10 +88,11 @@ export function renderStudyStorage(app: App, root: HTMLElement, study: StudyCard
   const controls = tools.createDiv({ cls: "study-cards-controls" });
   const save = controls.createEl("button", { text: "Экспортировать снимок" });
   save.disabled = saving;
-  save.onclick = () => report(download(root, study.exportStudyData(), "study-cards.json"));
+  save.onclick = () => report(saveSnapshot(app, root, study.exportStudyData(), "study-cards.json"));
   if (hasBeforeImport) {
-    controls.createEl("button", { text: "Скачать копию до импорта" }).onclick =
-      () => report(download(root, Promise.resolve(study.exportBeforeImport()), "study-cards-before-import.json"));
+    const label = Platform.isMobile ? "Сохранить копию до импорта" : "Скачать копию до импорта";
+    controls.createEl("button", { text: label }).onclick =
+      () => report(saveSnapshot(app, root, Promise.resolve(study.exportBeforeImport()), "study-cards-before-import.json"));
   }
   const picker = controls.createEl("input", { type: "file", attr: { accept: ".json,application/json" } });
   picker.hidden = true;
