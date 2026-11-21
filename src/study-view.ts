@@ -31,8 +31,7 @@ export class StudyView extends ItemView {
   protected render() {
     const root = this.contentEl;
     const opened = new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card")));
-    this.removeChild(this.answers);
-    this.answers = this.addChild(new Component());
+    this.resetAnswers();
     root.empty();
     root.addClass("study-cards-view");
     if (this.renderAlternateScreen(root)) return;
@@ -41,7 +40,8 @@ export class StudyView extends ItemView {
     const sectionId = this.study.activeSection;
     const section = this.study.sections.find(({ id }) => id === sectionId);
     if (this.study.sections.length) {
-      const select = toolbar.createEl("label", { text: "Учебный раздел " }).createEl("select");
+      const label = toolbar.createEl("label", { text: "Раздел " });
+      const select = label.createEl("select", { attr: { "aria-label": "Учебный раздел", "data-focus": "section" } });
       for (const { id, name } of this.study.sections) select.createEl("option", { value: id, text: name });
       select.value = section?.id ?? "";
       select.onchange = () => this.perform(this.study.openSection(select.value));
@@ -55,7 +55,7 @@ export class StudyView extends ItemView {
       () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open();
     toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta study-cards-create" }).onclick =
       () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open();
-    this.renderSectionActions(root, section.id, section.name);
+    this.renderSectionActions(root, section.id, section.name, opened);
 
     const sources = root.createEl("details", { attr: { "data-card": "sources" } });
     sources.open = opened.has("sources");
@@ -74,7 +74,12 @@ export class StudyView extends ItemView {
 
   protected renderAlternateScreen(_root: HTMLElement): boolean { return false; }
 
-  protected renderSectionActions(_root: HTMLElement, _sectionId: string, _name: string) {}
+  protected renderSectionActions(_root: HTMLElement, _sectionId: string, _name: string, _opened: Set<string | null>) {}
+
+  protected resetAnswers() {
+    this.removeChild(this.answers);
+    this.answers = this.addChild(new Component());
+  }
 
   protected renderErrors(root: HTMLElement, sectionId: string) {
     for (const { path, message } of this.study.errors(sectionId)) {
@@ -158,7 +163,8 @@ export class StudyView extends ItemView {
     root.addClass("markdown-rendered", "study-cards-markdown");
     try {
       await MarkdownRenderer.render(this.app, card.answer, root, card.path, this.answers);
-      for (const table of root.querySelectorAll("table")) {
+      const tables = [...root.querySelectorAll("table")];
+      for (const [index, table] of tables.entries()) {
         const parent = table.parentElement;
         const scroll = parent?.matches(".table-wrapper, .study-cards-table-scroll")
           ? parent : root.ownerDocument.createElement("div");
@@ -167,7 +173,8 @@ export class StudyView extends ItemView {
           scroll.append(table);
         }
         scroll.addClass("study-cards-table-scroll");
-        scroll.setAttrs({ tabindex: "0", role: "region", "aria-label": "Таблица" });
+        const label = table.caption?.textContent?.trim() || (tables.length > 1 ? "Таблица " + (index + 1) : "Таблица");
+        scroll.setAttrs({ tabindex: "0", role: "region", "aria-label": label });
       }
     } catch (error) {
       new Notice(message(error));
@@ -184,6 +191,7 @@ class SectionModal extends Modal {
 
   onOpen() {
     this.setTitle("Новый учебный раздел");
+    this.contentEl.addClass("study-cards-form-modal");
     const form = this.contentEl.createEl("form", { cls: "study-cards-form" });
     const name = form.createEl("label", { text: "Название " }).createEl("input", { type: "text" });
     name.required = true;
@@ -206,6 +214,7 @@ class DuplicateModal extends Modal {
 
   onOpen() {
     this.setTitle("Конфликт UUID");
+    this.contentEl.addClass("study-cards-form-modal");
     const cards = this.study.duplicates(this.id);
     if (cards.length < 2) {
       this.contentEl.createEl("p", { text: "Конфликт уже решён." });

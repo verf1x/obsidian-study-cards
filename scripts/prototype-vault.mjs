@@ -31,8 +31,10 @@ const writeJsonOnce = (path, data) => writeOnce(path, JSON.stringify(data, null,
 const format = { mode: "collection", level: 2 };
 const notes = "Материалы";
 const catalog = notes + "/HTTP — 100 вопросов.md";
+const entropy = notes + "/Энтропия источника.md";
 await mkdir(join(vault, notes), { recursive: true });
 await writeOnce(join(vault, catalog), await readFile(join(repo, "scripts", "prototype-http.md")));
+await writeOnce(join(vault, entropy), await readFile(join(repo, "scripts", "prototype-entropy.md")));
 await writeOnce(join(vault, notes, "Кэш браузера.md"), [
   "# Зачем браузеру кэш?",
   "",
@@ -54,6 +56,7 @@ await writeOnce(join(vault, "Старт.md"), [
   "",
   "- Смените **Вид каталога** и сравните три компоновки. Раскройте любую карточку, чтобы начать стандартную проверку с неё.",
   "- Нажмите **Свободная проверка**. Первый вопрос — длинный Markdown-эталон с таблицей, кодом, выноской и ссылкой.",
+  "- В учебном разделе **Теория информации** откройте [[Материалы/Энтропия источника]] для примера с LaTeX.",
   "- Раскройте эталон, оцените ответ, перейдите дальше. В отчёте с ошибками запустите **Повтор ошибок**.",
   "- Чтобы проверить подключение, добавьте [[Материалы/Кэш браузера]] как одну карточку с вопросом из H1.",
   "",
@@ -64,10 +67,17 @@ await writeOnce(join(vault, "Старт.md"), [
 const sectionId = randomUUID();
 await writeJsonOnce(join(plugin, "data.json"), {
   activeSection: sectionId,
-  sections: [{
-    id: sectionId, name: "HTTP и кэширование",
-    sources: [{ id: randomUUID(), kind: "file", path: catalog, recursive: false, format, excluded: [] }],
-  }],
+  sections: [
+    {
+      id: sectionId, name: "HTTP и кэширование",
+      sources: [{ id: randomUUID(), kind: "file", path: catalog, recursive: false, format, excluded: [] }],
+    },
+    {
+      id: randomUUID(), name: "Теория информации",
+      sources: [{ id: randomUUID(), kind: "file", path: entropy, recursive: false,
+        format: { mode: "single", question: "heading" }, excluded: [] }],
+    },
+  ],
   knownNotes: {},
   progress: {},
 });

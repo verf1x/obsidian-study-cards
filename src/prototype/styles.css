@@ -7,12 +7,15 @@
 
 .study-cards-prototype,
 .study-cards-prototype-modal,
+.study-cards-form-modal,
 .study-cards-source-modal {
   overflow-wrap: anywhere;
 }
 
 .study-cards-prototype :is(button, select):not(:where(.study-cards-markdown *)),
+.study-cards-catalog-tools input,
 .study-cards-prototype-modal :is(button, select, input),
+.study-cards-form-modal :is(button, select, input:not([type="checkbox"])),
 .study-cards-source-modal :is(button, select) {
   min-height: 44px;
   height: auto;
@@ -41,6 +44,7 @@
 
 .study-cards-prototype :focus-visible,
 .study-cards-prototype-modal :focus-visible,
+.study-cards-form-modal :focus-visible,
 .study-cards-source-modal :focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: -2px;
@@ -61,11 +65,9 @@
 }
 
 .study-cards-section-header {
-  padding: 1rem;
-  margin: 1rem 0 0.75rem;
-  border: 1px solid var(--study-cards-border);
-  border-radius: var(--study-cards-radius);
-  background: var(--study-cards-surface);
+  padding-block: 0.25rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--study-cards-border);
 }
 
 .study-cards-section-header p,
@@ -74,36 +76,38 @@
   font-size: var(--font-ui-small);
 }
 
-.study-cards-prototype .study-cards-catalog-header {
-  margin: 0.75rem 0;
+.study-cards-catalog-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-block: 0.75rem 0.5rem;
 }
 
-.study-cards-layout-switcher {
-  position: sticky;
-  bottom: 0.5rem;
-  z-index: 1;
+.study-cards-catalog-tools input {
+  flex: 1 1 12rem;
+  max-width: 28rem;
+  min-width: 0;
+}
+
+.study-cards-catalog-tools label {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  width: fit-content;
+  gap: 0.5rem;
+}
+
+.study-cards-prototype > .study-cards-controls > label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
   max-width: 100%;
-  padding: 0.25rem;
-  margin: 0.75rem auto;
-  border: 1px solid var(--study-cards-border);
-  border-radius: var(--study-cards-radius);
-  background: var(--background-primary);
-  box-shadow: var(--shadow-s);
 }
 
-.study-cards-layout-switcher label {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.study-cards-layout-switcher button {
-  min-width: 44px;
-  padding-inline: 0.4rem;
+.study-cards-search-status:not(:empty) {
+  margin-block: 0.25rem 0.5rem;
+  font-size: var(--font-ui-small);
 }
 
 .study-cards-prototype summary:not(:where(.study-cards-markdown *)) {
@@ -218,8 +222,9 @@
   overflow: hidden;
 }
 
-.study-cards-split-list {
-  max-height: 30rem;
+.study-cards-split-list,
+.study-cards-catalog-detail {
+  max-height: min(70vh, 40rem);
   overflow: auto;
 }
 
@@ -356,8 +361,7 @@
 .study-cards-grade-bar button[data-grade="correct"] { color: var(--color-green); }
 .study-cards-grade-bar button[data-grade="wrong"] { color: var(--text-error); }
 .study-cards-grade-bar button[aria-pressed="true"] {
-  outline: 2px solid currentColor;
-  outline-offset: -2px;
+  box-shadow: inset 0 0 0 2px currentColor;
   font-weight: var(--font-semibold);
 }
 
@@ -443,9 +447,15 @@
   cursor: pointer;
 }
 
+.study-cards-source-review {
+  max-height: min(48vh, 27rem);
+  overflow: auto;
+}
+
 @container (max-width: 36rem) {
   .study-cards-catalog-split { grid-template-columns: minmax(0, 1fr); }
   .study-cards-split-list { max-height: 11rem; }
+  .study-cards-catalog-detail { max-height: none; }
   .study-cards-table-row { grid-template-columns: 3ch minmax(0, 1fr) minmax(5.5rem, auto); }
   .study-cards-table-path,
   .study-cards-table-header > :nth-child(3) { display: none; }
@@ -453,8 +463,6 @@
 }
 
 @container (max-width: 25rem) {
-  .study-cards-section-header > *,
-  .study-cards-section-header button { width: 100%; }
   .study-cards-check-nav button { flex: 1; }
   .study-cards-counts > div { padding-inline: 0.4rem; }
   .study-cards-markdown .study-cards-table-scroll > table { font-size: 0.9em; }

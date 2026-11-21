@@ -41,9 +41,12 @@
   margin-block-end: 0;
 }
 
-.study-cards-markdown .study-cards-table-scroll {
+.study-cards-markdown :is(.study-cards-table-scroll, .math-block) {
   max-width: 100%;
   overflow-x: auto;
+}
+
+.study-cards-markdown .study-cards-table-scroll {
   margin-block: var(--p-spacing, 1rem);
 }
 

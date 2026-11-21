@@ -13,6 +13,8 @@ const layoutOrder = Object.keys(layouts) as Layout[];
 export class PrototypeView extends StudyView {
   private layout: Layout = "list";
   private selected?: string;
+  private search = "";
+  private catalogSection?: string;
   private shownCheck?: Check;
   private report?: Check;
   private lastAnswer?: { check: Check; id: string; markdown: string };
@@ -52,22 +54,28 @@ export class PrototypeView extends StudyView {
   protected render() {
     const previous = this.contentEl.querySelector<HTMLElement>(".study-cards-check");
     const focused = this.contentEl.ownerDocument.activeElement;
-    const focus = previous?.contains(focused) ? focused?.getAttribute("data-focus") : undefined;
+    const focus = this.contentEl.contains(focused) ? focused?.getAttribute("data-focus") : undefined;
+    const searchSelection = focus === "search" ? (focused as HTMLInputElement).selectionStart : null;
     const sameQuestion = previous?.dataset.position === String(this.shownCheck?.position);
     this.scrollTop = sameQuestion ? previous?.querySelector(".study-cards-check-body")?.scrollTop ?? 0 : 0;
     super.render();
-    if (sameQuestion && focus) this.focus(focus);
+    if (focus && (sameQuestion || (!previous && !this.shownCheck && !this.report))) {
+      const target = this.focus(focus);
+      if (searchSelection !== null) (target as HTMLInputElement | null)?.setSelectionRange(searchSelection, searchSelection);
+    }
   }
 
-  protected renderSectionActions(root: HTMLElement, sectionId: string, name: string) {
+  protected renderSectionActions(root: HTMLElement, sectionId: string, name: string, opened: Set<string | null>) {
     const cards = this.study.cards(sectionId);
+    const available = cards.filter(isCheckCard).length;
     const header = root.createDiv({ cls: "study-cards-section-header" });
+    root.prepend(header);
     const title = header.createDiv();
-    title.createEl("h1", { text: name, attr: { tabindex: "-1", "data-focus": "catalog" } });
+    title.createEl("h1", { text: "Карточки", attr: { tabindex: "-1", "data-focus": "catalog" } });
     const count = cards.length;
     title.createEl("p", {
       cls: "study-cards-muted",
-      text: "Карточек: " + count + " · доступно для проверки: " + cards.filter(isCheckCard).length,
+      text: "Всего: " + count + (available < count ? " · Для проверки: " + available : ""),
     });
     const actions = header.createDiv({ cls: "study-cards-controls" });
     if (this.checks.active) {
@@ -77,12 +85,13 @@ export class PrototypeView extends StudyView {
     const start = actions.createEl("button", {
       text: "Свободная проверка", cls: this.checks.active ? undefined : "mod-cta",
     });
-    start.disabled = !cards.some(isCheckCard);
+    start.disabled = available === 0;
     start.onclick = () => this.setup(sectionId, name);
 
     const history = this.checks.history.filter((check) => check.sectionId === sectionId);
     if (history.length) {
-      const details = root.createEl("details", { cls: "study-cards-history" });
+      const details = root.createEl("details", { cls: "study-cards-history", attr: { "data-card": "history" } });
+      details.open = opened.has("history");
       details.createEl("summary", { text: "История проверок · " + history.length });
       history.forEach((check, index) => {
         const label = check.retry ? "Повтор ошибок" : "Свободная проверка";
@@ -94,60 +103,68 @@ export class PrototypeView extends StudyView {
   }
 
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
+    if (this.catalogSection !== sectionId) {
+      this.catalogSection = sectionId;
+      this.search = "";
+      this.selected = undefined;
+    }
     const cards = this.study.cards(sectionId, "source");
-    root.createEl("h2", { text: "Карточки", cls: "study-cards-catalog-header" });
     this.renderErrors(root, sectionId);
     if (!cards.length) {
       root.createEl("p", { text: "Добавьте источник или создайте карточку.", cls: "study-cards-empty" });
       return;
     }
-    if (this.layout === "table") this.renderTable(root, cards, opened);
-    else if (this.layout === "split") this.renderSplit(root, cards);
-    else {
-      const list = root.createDiv({ cls: "study-cards-catalog-list" });
-      cards.forEach((card) => this.renderCard(list, card, this.cardKey(card), opened.has(this.cardKey(card))));
-    }
-    this.renderSwitcher(root);
-  }
-
-  private renderSwitcher(root: HTMLElement) {
-    const bar = root.createEl("nav", { cls: "study-cards-layout-switcher", attr: { "aria-label": "Вид каталога" } });
-    const switchLayout = (layout: Layout, focus: string) => {
-      this.layout = layout;
-      this.render();
-      this.focus(focus);
-      void this.app.workspace.requestSaveLayout();
-    };
-    const step = (direction: -1 | 1, focus: string) => {
-      const index = layoutOrder.indexOf(this.layout);
-      switchLayout(layoutOrder[(index + direction + layoutOrder.length) % layoutOrder.length]!, focus);
-    };
-    bar.createEl("button", { text: "←", attr: { "aria-label": "Предыдущий вид каталога", "data-focus": "layout-back" } })
-      .onclick = () => step(-1, "layout-back");
+    const bar = root.createDiv({ cls: "study-cards-catalog-tools" });
+    const search = bar.createEl("input", {
+      type: "search", placeholder: "Найти карточку", value: this.search,
+      attr: { "aria-label": "Найти карточку", "data-focus": "search" },
+    });
     const layout = bar.createEl("label", { text: "Вид каталога" }).createEl("select", { attr: { "data-focus": "layout" } });
     for (const [value, text] of Object.entries(layouts)) layout.createEl("option", { value, text });
     layout.value = this.layout;
-    layout.onchange = () => switchLayout(layout.value as Layout, "layout");
-    bar.createEl("button", { text: "→", attr: { "aria-label": "Следующий вид каталога", "data-focus": "layout-next" } })
-      .onclick = () => step(1, "layout-next");
-    bar.onkeydown = (event) => {
-      if (event.altKey || event.ctrlKey || event.shiftKey || event.metaKey || event.target === layout) return;
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      event.preventDefault();
-      event.stopPropagation();
-      step(event.key === "ArrowLeft" ? -1 : 1, "layout-next");
+    const status = root.createDiv({ cls: "study-cards-search-status study-cards-muted", attr: { role: "status" } });
+    const results = root.createDiv();
+    const positions = new Map(cards.map((card, index) => [card, index + 1]));
+    const renderResults = (expanded: Set<string | null>) => {
+      const query = this.search.trim().toLocaleLowerCase();
+      const visible = query ? cards.filter(({ question }) => question.toLocaleLowerCase().includes(query)) : cards;
+      status.textContent = !query ? "" : visible.length
+        ? "Найдено: " + visible.length + " из " + cards.length : "Карточки не найдены.";
+      results.empty();
+      if (!visible.length) return;
+      if (this.layout === "table") this.renderTable(results, visible, expanded, positions);
+      else if (this.layout === "split") this.renderSplit(results, visible);
+      else {
+        const list = results.createDiv({ cls: "study-cards-catalog-list" });
+        visible.forEach((card) => this.renderCard(list, card, this.cardKey(card), expanded.has(this.cardKey(card))));
+      }
     };
+    const refreshResults = () => {
+      const expanded = new Set([...results.querySelectorAll("details[open]")].map((row) => row.getAttribute("data-card")));
+      this.resetAnswers();
+      renderResults(expanded);
+    };
+    search.oninput = () => {
+      this.search = search.value;
+      refreshResults();
+    };
+    layout.onchange = () => {
+      this.layout = layout.value as Layout;
+      refreshResults();
+      void this.app.workspace.requestSaveLayout();
+    };
+    renderResults(opened);
   }
 
-  private renderTable(root: HTMLElement, cards: Card[], opened: Set<string | null>) {
+  private renderTable(root: HTMLElement, cards: Card[], opened: Set<string | null>, positions: Map<Card, number>) {
     const table = root.createDiv({ cls: "study-cards-catalog-table" });
     const header = table.createDiv({ cls: "study-cards-table-row study-cards-table-header", attr: { "aria-hidden": "true" } });
     ["№", "Вопрос", "Заметка", "Статус освоения"].forEach((label) => header.createSpan({ text: label }));
-    cards.forEach((card, index) => {
+    cards.forEach((card) => {
       const key = this.cardKey(card);
       this.renderCard(table, card, key, opened.has(key), (summary) => {
         summary.addClass("study-cards-table-row");
-        summary.createSpan({ text: String(index + 1), cls: "study-cards-muted" });
+        summary.createSpan({ text: String(positions.get(card)), cls: "study-cards-muted" });
         summary.createSpan({ text: card.question });
         summary.createSpan({ text: card.path, cls: "study-cards-muted study-cards-table-path" });
       });
@@ -158,23 +175,27 @@ export class PrototypeView extends StudyView {
     const selected = cards.find((card) => this.cardKey(card) === this.selected) ?? cards[0]!;
     const split = root.createDiv({ cls: "study-cards-catalog-split" });
     const list = split.createDiv({ cls: "study-cards-split-list" });
+    const detail = split.createDiv({ cls: "study-cards-catalog-detail" });
+    const show = (card: Card) => {
+      detail.empty();
+      detail.createEl("h3", { text: card.question });
+      this.renderCardBody(detail, card);
+    };
     cards.forEach((card) => {
       const button = list.createEl("button", {
         text: card.question, attr: { "aria-pressed": String(card === selected) },
       });
       button.onclick = () => {
+        if (button.getAttribute("aria-pressed") === "true") return;
         this.selected = this.cardKey(card);
-        const scroll = list.scrollTop;
-        this.render();
-        const next = root.querySelector<HTMLElement>(".study-cards-split-list");
-        if (!next) return;
-        next.scrollTop = scroll;
-        next.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus({ preventScroll: true });
+        list.querySelector('button[aria-pressed="true"]')?.setAttribute("aria-pressed", "false");
+        button.setAttribute("aria-pressed", "true");
+        this.resetAnswers();
+        show(card);
+        detail.scrollTop = 0;
       };
     });
-    const detail = split.createDiv({ cls: "study-cards-catalog-detail" });
-    detail.createEl("h3", { text: selected.question });
-    this.renderCardBody(detail, selected);
+    show(selected);
   }
 
   protected renderCardSummary(root: HTMLElement, card: Card) {
@@ -195,6 +216,7 @@ export class PrototypeView extends StudyView {
   }
 
   private setup(sectionId: string, name: string, start?: string) {
+    const restoreFocus = this.returnFocus();
     const open = (previous?: Check) => {
       new SetupModal(this.app, name, () => this.study.cards(sectionId, "source").filter(isCheckCard),
         (listener) => this.study.subscribe(listener), start, (selected) => {
@@ -203,7 +225,7 @@ export class PrototypeView extends StudyView {
             return;
           }
           this.showCheck(new Check(sectionId, name, selected));
-        }, () => this.focus("catalog")).open();
+        }, restoreFocus).open();
     };
     this.replaceCheck(open);
   }
@@ -220,7 +242,7 @@ export class PrototypeView extends StudyView {
       { label: "Продолжить текущую", action: () => {
         if (this.checks.active) this.showCheck(this.checks.active);
       }, primary: true },
-    ]).open();
+    ], this.returnFocus()).open();
   }
 
   private showCheck(check: Check) {
@@ -246,6 +268,15 @@ export class PrototypeView extends StudyView {
   private focus(name: string) {
     const target = this.contentEl.querySelector<HTMLElement>('[data-focus="' + name + '"]');
     target?.focus({ preventScroll: true });
+    return target;
+  }
+
+  private returnFocus() {
+    const opener = this.contentEl.ownerDocument.activeElement as HTMLElement | null;
+    return () => {
+      if (opener && this.contentEl.contains(opener)) opener.focus();
+      else this.focus(this.report ? "report" : "catalog");
+    };
   }
 
   protected renderAlternateScreen(root: HTMLElement) {
@@ -288,14 +319,12 @@ export class PrototypeView extends StudyView {
       body.createEl("button", { text: card.path, cls: "study-cards-note-link" }).onclick = () => this.perform(this.openNote(card.path));
       if (revealed) {
         const answer = body.createDiv({ cls: "study-cards-answer" });
-        answer.createEl("h2", { text: "Эталон", attr: { tabindex: "-1", "data-focus": "answer" } });
-        if (this.updated) answer.createEl("p", { text: "Эталон обновлён из заметки", cls: "study-cards-muted" });
+        answer.createEl("h2", { text: "Ответ", attr: { tabindex: "-1", "data-focus": "answer" } });
+        if (this.updated) answer.createEl("p", { text: "Ответ обновлён в заметке", cls: "study-cards-muted" });
         const scrollTop = this.scrollTop;
         void this.renderMarkdown(answer.createDiv(), card).then(() => {
           if (scrollTop && body.isConnected) body.scrollTop = scrollTop;
         });
-      } else {
-        body.createEl("p", { text: "Вспомните ответ, затем сравните его с эталоном.", cls: "study-cards-muted" });
       }
     }
 
@@ -305,30 +334,33 @@ export class PrototypeView extends StudyView {
     const back = nav.createEl("button", { text: "Назад", attr: { "data-focus": "back" } });
     back.disabled = check.position === 0;
     back.onclick = () => this.move(check, -1);
-    nav.createEl("button", { text: "Завершить", attr: { "data-focus": "finish" } }).onclick =
-      () => this.confirmFinish(check, "finish");
     const last = check.position === check.questions.length - 1;
+    const canAdvance = !card || Boolean(check.current.grade) || check.position < check.reached;
+    if (!last) {
+      nav.createEl("button", { text: "Завершить", attr: { "data-focus": "finish" } }).onclick =
+        () => this.confirmFinish(check, "finish");
+    }
     const next = nav.createEl("button", {
-      text: last ? "К итогу" : "Далее", cls: "mod-cta", attr: { "data-focus": "next" },
+      text: last ? "Завершить" : "Далее", cls: canAdvance ? "mod-cta" : undefined, attr: { "data-focus": "next" },
     });
-    next.disabled = Boolean(card && !check.current.grade && check.position === check.reached);
+    next.disabled = !last && !canAdvance;
     next.onclick = () => last ? this.confirmFinish(check, "next") : this.move(check, 1);
 
     if (card && !revealed) {
       const reveal = gradeBar.createEl("button", {
-        text: "Показать эталон", cls: "mod-cta", attr: { "data-focus": "reveal", "aria-keyshortcuts": "Space" },
+        text: "Показать ответ", cls: "mod-cta", attr: { "data-focus": "reveal", "aria-keyshortcuts": "Space" },
       });
       reveal.onclick = () => {
         this.checks.update(check, () => { check.revealed.add(card.id); });
         this.focus("answer");
       };
-      footer.createEl("p", { text: "Пробел — раскрыть эталон", cls: "study-cards-shortcuts" });
-      this.bindKeys(panel, { " ": reveal, ArrowLeft: back, ArrowRight: next });
+      footer.createEl("p", { text: "Пробел — показать ответ", cls: "study-cards-shortcuts" });
+      this.bindKeys(panel, { " ": reveal, ArrowLeft: back, ArrowRight: last ? undefined : next });
     } else if (card) {
       const correct = this.gradeButton(gradeBar, check, card, "correct", "Верно", "1");
       const wrong = this.gradeButton(gradeBar, check, card, "wrong", "Ошибка", "2");
       footer.createEl("p", { text: "1 — верно · 2 — ошибка · ← → — навигация", cls: "study-cards-shortcuts" });
-      this.bindKeys(panel, { "1": correct, "2": wrong, ArrowLeft: back, ArrowRight: next });
+      this.bindKeys(panel, { "1": correct, "2": wrong, ArrowLeft: back, ArrowRight: last && !canAdvance ? undefined : next });
     } else {
       gradeBar.hidden = true;
       if (check.current.grade) footer.createEl("p", {
@@ -354,11 +386,11 @@ export class PrototypeView extends StudyView {
     return button;
   }
 
-  private bindKeys(root: HTMLElement, keys: Record<string, HTMLButtonElement>) {
+  private bindKeys(root: HTMLElement, keys: Record<string, HTMLButtonElement | undefined>) {
     root.onkeydown = (event) => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat) return;
       const target = event.target as HTMLElement;
-      if (target.closest("a, input, select, textarea, summary, pre, [contenteditable], .study-cards-table-scroll")
+      if (target.closest("a, input, select, textarea, summary, pre, [contenteditable], .study-cards-table-scroll, .math-block")
         || (event.key === " " && target.closest("button"))) return;
       const button = keys[event.key];
       if (!button || button.disabled) return;
