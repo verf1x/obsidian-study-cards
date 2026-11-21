@@ -218,8 +218,8 @@ function header(title, detail, ...controls) {
 function empty() {
   const l = labels();
   return div("empty", header(t("Начните с ваших заметок", "Start with your notes")),
-    text(t("Подключите заметку с одной карточкой или целый сборник вопросов. Перед сохранением вы увидите, какие карточки попадут в раздел.",
-      "Connect a single-card note or a question collection. Preview the cards before adding them to a study section."), "muted"),
+    text(t("Подключите заметку с одной карточкой или целый сборник вопросов.",
+      "Connect a single-card note or a question collection."), "muted"),
     primary(l.connect, () => enroll(true)));
 }
 
@@ -237,16 +237,14 @@ function practice(section) {
   const reviews = div("rows",
     row(t("Интервальное повторение", "Spaced repetition"), t("Доступно сейчас · ", "Due now · ") + due,
       button(t("Открыть", "Open"), () => show("review"), { disabled: !ready.length })),
-    misses ? row(t("Ошибки последней проверки", "Mistakes from the last check"), cardCount(misses), button(l.retry, () => retry(latest))) : null,
-    latest ? row(t("Последний результат", "Latest result"), score(latest).correct + "/" + latest.ids.length + " " + t("верно", "correct"),
-      quiet(t("Открыть результат", "Open result"), () => { state.result = latest; show("result"); })) : null);
+    misses ? row(t("Ошибки последней проверки", "Mistakes from the last check"), cardCount(misses), button(l.retry, () => retry(latest))) : null);
   const next = state.working && ready.length ? quiet(t("Новая проверка", "New free check"), () => setup()) : null;
   const noCards = !ready.length ? text(t("Чтобы начать проверку, подключите заметки во вкладке «Карточки».", "Connect notes in Cards to start a free check."), "notice") : null;
   if (variant === "B") {
     return div("stack", header(section.name, cardCount(ready.length), next), noCards,
       div("columns", div("stack", freeCheck, div("rows",
         row(t("Карточки раздела", "Section cards"), cardCount(ready.length), button(l.cards, () => show("cards"))))),
-      div("stack", heading(2, t("Повторение и результаты", "Review and results")), reviews)));
+      div("stack", heading(2, t("Повторение", "Review")), reviews)));
   }
   return div("stack", header(section.name, cardCount(ready.length), next), noCards, freeCheck, reviews);
 }
@@ -317,7 +315,7 @@ function confirmDisconnect(section, source) {
 }
 
 function enroll(creating) {
-  state.enrollment = { creating, chosen: new Set(), name: "", from: state.page };
+  state.enrollment = { creating, chosen: new Set(), expanded: new Set(), name: "", nameEdited: false, from: state.page };
   show("enroll");
 }
 
@@ -325,7 +323,7 @@ function enrollment() {
   const l = labels();
   const draft = state.enrollment;
   const choices = sources.filter(source => draft.creating || !current().sources.includes(source.id));
-  const count = sources.filter(s => draft.chosen.has(s.id)).reduce((total, s) => total + s.cards.length, 0);
+  const countReadout = el("small", { role: "status" });
   const save = () => {
     if (draft.creating) {
       const first = state.sections.length === 0 && !state.results.length;
@@ -339,35 +337,47 @@ function enrollment() {
     tell(t("Карточки добавлены", "Cards added"));
   };
   const cancel = () => { state.enrollment = null; show(draft.from); };
-  if (state.page === "preview") {
-    const confirm = primary(draft.creating ? t("Создать и подключить", "Create and connect") : l.connect, save,
-      { disabled: draft.creating && !draft.name.trim() });
-    const nameField = el("label", { class: "field" }, t("Название раздела", "Section name"),
-      el("input", { type: "text", value: draft.name, oninput: e => {
-        draft.name = e.target.value;
-        confirm.disabled = !draft.name.trim();
-      } }));
-    return div("stack", header(t("Предпросмотр карточек", "Preview cards"), cardCount(count)),
-      draft.creating ? nameField : null,
-      div("rows", choices.filter(source => draft.chosen.has(source.id)).map(source =>
-        row(source.path, cardCount(source.cards.length) + " · " + (source.cards.length > 1 ? t("Сборник", "Collection") : t("Одна карточка", "Single-card note")),
-          quiet(t("Посмотреть", "Preview"), () => notePreview(source))))),
-      actions(quiet(l.back, () => show("enroll")), confirm, quiet(l.cancel, cancel)));
+  const confirm = primary(draft.creating ? t("Создать и подключить", "Create and connect") : l.connect, save);
+  const nameInput = draft.creating ? el("input", { type: "text", value: draft.name, oninput: e => {
+    draft.name = e.target.value;
+    draft.nameEdited = true;
+    update();
+  } }) : null;
+  function update() {
+    const selected = choices.filter(source => draft.chosen.has(source.id));
+    if (nameInput && !draft.nameEdited) {
+      draft.name = selected.length ? selected[0].path.split("/")[0] : "";
+      nameInput.value = draft.name;
+    }
+    const count = selected.reduce((total, source) => total + source.cards.length, 0);
+    countReadout.textContent = t("Выбрано · ", "Selected · ") + cardCount(count);
+    confirm.disabled = !selected.length || (draft.creating && !draft.name.trim());
   }
-  const next = primary(t("Предпросмотр", "Preview cards"), () => {
-    if (!draft.name) draft.name = sources.find(s => draft.chosen.has(s.id)).path.split("/")[0];
-    show("preview");
-  }, { disabled: !draft.chosen.size });
-  return div("stack", header(draft.creating ? l.newSection : l.connect, draft.creating ? null : current().name),
-    text(t("Выберите заметки, из которых хотите учиться.", "Choose the notes you want to study from."), "muted"),
-    div("boxed", choices.map(source => el("label", { class: "pick" },
+  const notes = choices.map(source => {
+    const previewId = "preview-" + source.id;
+    const preview = el("div", { class: "stack enrollment-preview", id: previewId, hidden: !draft.expanded.has(source.id) },
+      source.cards.map(([id]) => div("tight", heading(3, lookup(id).question), answer(lookup(id)))));
+    const previewButton = quiet(t("Предпросмотр", "Preview"), () => {
+      preview.hidden = !preview.hidden;
+      if (preview.hidden) draft.expanded.delete(source.id);
+      else draft.expanded.add(source.id);
+      previewButton.setAttribute("aria-expanded", String(!preview.hidden));
+    }, { "aria-controls": previewId, "aria-expanded": String(!preview.hidden),
+      "aria-label": t("Предпросмотр · ", "Preview · ") + source.path });
+    const choice = el("label", { class: "pick" },
       el("input", { type: "checkbox", checked: draft.chosen.has(source.id), onchange: e => {
         if (e.target.checked) draft.chosen.add(source.id);
         else draft.chosen.delete(source.id);
-        next.disabled = !draft.chosen.size;
-      } }), div("tight", source.path, meta(cardCount(source.cards.length)))))),
-    !choices.length ? text(t("Все учебные заметки уже подключены.", "All sample notes are already connected."), "muted") : null,
-    actions(next, quiet(l.cancel, cancel)));
+        update();
+      } }), div("tight", source.path, meta(cardCount(source.cards.length))));
+    return div("enrollment-note", div("enrollment-row", choice, previewButton), preview);
+  });
+  update();
+  return div("stack", header(draft.creating ? l.newSection : l.connect, draft.creating ? null : current().name),
+    nameInput ? el("label", { class: "field" }, t("Название раздела", "Section name"), nameInput) : null,
+    notes.length ? div("boxed enrollment-list", notes)
+      : text(t("Все учебные заметки уже подключены.", "All sample notes are already connected."), "muted"),
+    div("line", countReadout, actions(confirm, quiet(l.cancel, cancel))));
 }
 
 function confirmDeletion() {
@@ -395,7 +405,7 @@ function confirmDeletion() {
 function setup(anchor = null) {
   const introductory = !anchor && current().introductory;
   state.setup = { method: introductory ? "random" : "ordered", count: Math.min(eligible().length, introductory ? 5 : 20),
-    anchor, query: "", only: false, chosen: new Set(anchor ? [anchor] : current().remembered), from: state.page };
+    anchor, query: "", chosen: new Set(anchor ? [anchor] : current().remembered), from: state.page };
   show("setup");
 }
 
@@ -446,7 +456,7 @@ function freeCheckSetup() {
       const focused = document.activeElement.id;
       const groups = sources.map(source => {
         const noteCards = pool.filter(card => card.source === source.id);
-        const visible = draft.only ? noteCards.filter(card => draft.chosen.has(card.id)) : noteCards.filter(card => searchMatches(card, draft.query));
+        const visible = noteCards.filter(card => searchMatches(card, draft.query));
         if (!visible.length) return null;
         const picked = noteCards.filter(card => draft.chosen.has(card.id)).length;
         const all = el("input", { type: "checkbox", id: "group-" + source.id, checked: picked === noteCards.length,
@@ -475,16 +485,12 @@ function freeCheckSetup() {
         else draft.chosen.delete(card.id);
         draw();
       } }), card.question);
-    const search = el("input", { type: "search", value: draft.query, disabled: draft.only,
+    const search = el("input", { type: "search", value: draft.query,
       placeholder: t("Вопрос или путь к заметке", "Question or note path"), "aria-label": t("Поиск карточек", "Search cards"),
       oninput: e => { draft.query = e.target.value; draw(); } });
-    const filter = only => { draft.only = only; render(); document.querySelector(only ? "#selected" : "#all")?.focus(); };
     manualRows = div("boxed picker");
     draw();
-    content.append(div("catalog-tools", search, actions(
-      button(t("Все", "All"), () => filter(false), { id: "all", "aria-pressed": !draft.only }),
-      button(t("Выбранные", "Selected"), () => filter(true), { id: "selected", "aria-pressed": draft.only }))),
-      manualRows);
+    content.append(search, manualRows);
     if (draft.anchor) content.append(meta(t("Из карточки подбор начинается с неё.", "Opening setup from a card starts the selection with that card.")));
     else if (section.remembered.length) content.append(meta(t("Подставлен набор из последнего ручного запуска.", "Loaded the last launched manual set.")));
     content.append(div("setup-footer tight",
@@ -646,14 +652,14 @@ function render(focus = false) {
   } else if (page === "history") view = historyScreen();
   else if (page === "result") view = report();
   else if (page === "session") view = session();
-  else if (page === "enroll" || page === "preview") view = enrollment();
+  else if (page === "enroll") view = enrollment();
   else if (!section) view = empty();
   else if (page === "setup") view = freeCheckSetup();
   else if (page === "cards") view = catalog(section);
   else if (page === "sources") view = sourcesPage(section);
   else if (page === "review") view = reviewScreen();
   else view = practice(section);
-  const navigation = !state.recovery && !["enroll", "preview", "session", "result", "review"].includes(page);
+  const navigation = !state.recovery && !["enroll", "session", "result", "review"].includes(page);
   workspace.replaceChildren(div("shell " + (variant === "C" ? "catalog-layout" : ""),
     top(), div(variant === "B" && navigation ? "shelf" : "",
       variant === "B" && navigation ? rail() : null,
