@@ -1,3 +1,5 @@
+import type { CardProgress, FreeSession, IntervalReview, KnownNote, ReviewSchedule, Section, Source, SourceRequest, StudyData } from "./study-state";
+import { StaleStudyState, StudyStorage, type ImportPreview, type StudyMutation } from "./study-storage";
 import { MarkdownNote, sameFormat, single, type Format, type MarkdownCard, type Status } from "./markdown";
 
 export interface StudyVault {
@@ -10,29 +12,9 @@ export interface StudyVault {
   trash(path: string, validate: (source: string) => void): Promise<void>;
 }
 
-export type SourceRequest =
-  | { kind: "file"; path: string; format?: Format }
-  | { kind: "folder"; path: string; recursive?: boolean; format?: Format };
+export type { CardProgress, Source, SourceRequest } from "./study-state";
 
-export interface Source {
-  id: string;
-  kind: SourceRequest["kind"];
-  path: string;
-  recursive: boolean;
-  format: Format;
-  excluded: string[];
-}
-
-interface Section { id: string; name: string; sources: Source[] }
-interface KnownCard { question: string; answerHash: number; id: string }
-interface KnownNote { format: Format; cards: KnownCard[] }
-export interface CardProgress { history?: unknown; schedule?: unknown }
-export interface StudyData {
-  sections: Section[];
-  activeSection: string | null;
-  knownNotes: Record<string, KnownNote>;
-  progress: Record<string, CardProgress>;
-}
+type ProgressMutation = Pick<StudyMutation, "id" | "revision">;
 
 interface IndexedNote {
   note: MarkdownNote;
@@ -65,7 +47,6 @@ export interface PreviewRow {
 interface PlannedRow extends PreviewRow { text: string; excluded: boolean }
 export type Confirmation = { confirmed: true } | { confirmed: false; paths: readonly string[] };
 
-const emptyData: StudyData = { sections: [], activeSection: null, knownNotes: {}, progress: {} };
 const hasPath = (path: string, parent: string) => parent === "" || path === parent || path.startsWith(parent + "/");
 export const remapPath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
   ? newPath + path.slice(oldPath.length) : path;
@@ -141,77 +122,160 @@ class ChangedNote extends Error {
 
 export class StudyCards {
   private data: StudyData;
-  private readonly index = new Map<string, IndexedNote>();
+  private index = new Map<string, IndexedNote>();
+  private catalog: { data: StudyData; index: Map<string, IndexedNote>; revision: string | null };
   private readonly listeners = new Set<() => void>();
   private queue = Promise.resolve<unknown>(undefined);
-  private lastSaved: string;
   private revision = 0;
+  private saving = false;
 
   constructor(
     private readonly vault: StudyVault,
-    data: StudyData | undefined,
-    private readonly save: (data: StudyData) => Promise<void>,
+    private readonly storage: StudyStorage,
     private readonly newId: () => string,
   ) {
-    this.data = { ...emptyData, ...data, knownNotes: { ...data?.knownNotes }, progress: { ...data?.progress } };
-    this.lastSaved = JSON.stringify(this.data);
+    const { data, revision } = storage.state;
+    this.data = data;
+    this.catalog = { data, index: this.index, revision };
   }
 
-  get sections(): readonly Section[] { return this.data.sections; }
-  get activeSection() { return this.data.activeSection; }
+  get sections(): readonly Section[] { return this.catalog.data.sections; }
+  get activeSection() {
+    const saved = this.storage.activeSection;
+    return this.sections.find(({ id }) => id === saved)?.id ?? this.sections[0]?.id ?? null;
+  }
+
+  get persistence() {
+    return { token: this.storage.token, problem: this.storage.problem, saving: this.saving,
+      hasBeforeImport: this.storage.hasBeforeImport };
+  }
+
+  get progress() {
+    const { revision, data: { progress, freeSession, freeResults } } = this.catalog;
+    return structuredClone({ revision, progress, freeSession, freeResults });
+  }
 
   subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   }
 
-  private run<T>(action: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(async () => {
-      const revision = this.revision;
-      try {
-        return await action();
-      } finally {
-        const data = JSON.stringify(this.data);
-        const changed = data !== this.lastSaved;
-        if (changed) {
-          await this.save(this.data);
-          this.lastSaved = data;
-        }
-        if (changed || revision !== this.revision) {
-          for (const listener of this.listeners) listener();
-        }
-      }
-    });
+  private notify() {
+    for (const listener of this.listeners) listener();
+  }
+
+  private enqueue<T>(action: () => Promise<T>) {
+    const result = this.queue.then(action);
     this.queue = result.catch(() => undefined);
     return result;
   }
 
-  private section(id: string) {
-    const section = this.data.sections.find((item) => item.id === id);
+  private async adoptStorage() {
+    if (this.storage.revision === this.catalog.revision) return;
+    const state = this.storage.state;
+    this.data = state.data;
+    this.index = new Map();
+    await this.scanIndex(false);
+    this.catalog = { data: this.data, index: this.index, revision: state.revision };
+  }
+
+  private storageAction<T>(action: () => Promise<T>) {
+    return this.enqueue(async () => {
+      this.saving = true;
+      this.notify();
+      try {
+        return await action();
+      } finally {
+        this.saving = false;
+        await this.adoptStorage();
+        this.notify();
+      }
+    });
+  }
+
+  refreshStorage() {
+    return this.enqueue(async () => {
+      const token = this.storage.token;
+      await this.storage.refresh();
+      await this.adoptStorage();
+      if (this.storage.token !== token) this.notify();
+    });
+  }
+
+  exportStudyData() { return this.storageAction(() => this.storage.export()); }
+  exportBeforeImport() { return this.storage.exportBeforeImport(); }
+  previewImport(raw: string) { return this.storageAction(() => this.storage.previewImport(raw)); }
+  importStudyData(preview: ImportPreview) { return this.storageAction(() => this.storage.import(preview)); }
+  chooseStudyVersion(token: number, id: string) { return this.storageAction(() => this.storage.choose(token, id)); }
+  restoreStudyData(token: number, useBackup: boolean) { return this.storageAction(() => this.storage.restore(token, useBackup)); }
+
+  private run<T>(description: string, action: () => Promise<T>, options?: { background: boolean }): Promise<T>;
+  private run(description: string, action: () => Promise<void>, options: { mutation: ProgressMutation }): Promise<void>;
+  private run<T>(description: string, action: () => Promise<T>, options: { background?: boolean; mutation?: ProgressMutation } = {}) {
+    const mutation = options.mutation;
+    return this.enqueue(async () => {
+      const token = this.storage.token;
+      const revision = this.revision;
+      let published = false;
+      try {
+        await this.storage.refresh();
+        await this.adoptStorage();
+        const base = this.catalog;
+        if (mutation && this.storage.wasCommitted(mutation.id)) return;
+        if (mutation && mutation.revision !== base.revision) throw new StaleStudyState();
+        if (!options.background) this.storage.assertWritable();
+        this.data = structuredClone(base.data);
+        this.index = new Map(base.index);
+        const result = await action();
+        if (mutation || JSON.stringify(this.data) !== JSON.stringify(base.data)) {
+          if (!options.background) {
+            this.saving = true;
+            this.notify();
+          }
+          await this.storage.commit({ id: mutation?.id ?? this.newId(), revision: base.revision, action: description }, () => this.data);
+          this.data = this.storage.state.data;
+          published = true;
+        }
+        this.catalog = { data: this.data, index: this.index, revision: this.storage.revision };
+        return result;
+      } finally {
+        const wasSaving = this.saving;
+        this.saving = false;
+        await this.adoptStorage();
+        this.data = this.catalog.data;
+        this.index = this.catalog.index;
+        if (wasSaving || published || revision !== this.revision || token !== this.storage.token) this.notify();
+      }
+    });
+  }
+
+  private section(id: string, data = this.data) {
+    const section = data.sections.find((item) => item.id === id);
     if (!section) throw new Error("Учебный раздел не найден");
     return section;
   }
 
-  addSection(name: string) {
-    return this.run(async () => {
+  async addSection(name: string) {
+    const id = this.newId();
+    await this.run("Добавление учебного раздела", async () => {
       const title = name.trim();
       if (!title) throw new Error("Введите название учебного раздела");
-      const id = this.newId();
-      this.data.sections = [...this.data.sections, { id, name: title, sources: [] }];
-      this.data.activeSection = id;
-      return id;
+      this.data.sections.push({ id, name: title, sources: [] });
     });
+    await this.openSection(id);
+    return id;
   }
 
   openSection(id: string) {
-    return this.run(async () => {
-      this.section(id);
-      this.data.activeSection = id;
+    return this.enqueue(async () => {
+      this.section(id, this.catalog.data);
+      await this.storage.openSection(id);
+      this.notify();
     });
   }
 
   removeSource(sectionId: string, sourceId: string) {
-    return this.run(async () => {
+    return this.run("Отключение источника", async () => {
       const section = this.section(sectionId);
       const removed = section.sources.find(({ id }) => id === sourceId);
       section.sources = section.sources.filter(({ id }) => id !== sourceId);
@@ -223,14 +287,14 @@ export class StudyCards {
     });
   }
 
-  private memberships(path: string, note: MarkdownNote) {
-    return this.data.sections.flatMap((section) => section.sources.flatMap((source) =>
+  private memberships(path: string, note: MarkdownNote, data = this.data) {
+    return data.sections.flatMap((section) => section.sources.flatMap((source) =>
       includesPath(source, path) && (source.kind === "file" || (note.marked && !source.excluded.includes(path)))
         ? [{ section: section.id, source }] : []));
   }
 
-  private formats(note: MarkdownNote, defaults: Format[]) {
-    const known = this.data.knownNotes[note.path];
+  private formats(note: MarkdownNote, defaults: Format[], data = this.data) {
+    const known = data.knownNotes[note.path];
     if (known) return [note.format(known.format)];
     const formats: Format[] = [];
     for (const fallback of defaults) {
@@ -270,12 +334,12 @@ export class StudyCards {
       ? [[index, this.newId()]] : []));
   }
 
-  private indexNote(note: MarkdownNote, format: Format, sections: string[], error?: string) {
+  private indexNote(note: MarkdownNote, format: Format, sections: string[], error?: string, updateKnown = true) {
     const path = note.path;
     const known = this.data.knownNotes[path];
     const cards = error ? [] : note.cards(format);
     const missing = previousIds(cards, known, format);
-    if (!error && !this.vault.hasUnsavedChanges(path, note.source)) {
+    if (updateKnown && !error && !this.vault.hasUnsavedChanges(path, note.source)) {
       const records = cards.flatMap((card) => {
         const id = card.id ?? missing.get(card);
         return id ? [{ question: card.question, answerHash: answerHash(card.answer), id }] : [];
@@ -300,7 +364,8 @@ export class StudyCards {
     if (this.index.delete(path)) this.revision++;
   }
 
-  private async reconcile(path: string, autoAssign = true, saved?: MarkdownNote) {
+  private async reconcile(path: string, autoAssign = true, saved?: MarkdownNote, updateKnown = true) {
+    if (this.storage.problem) autoAssign = updateKnown = false;
     if (!this.data.sections.some(({ sources }) => sources.some((source) => includesPath(source, path)))) {
       this.removeFromIndex(path);
       return;
@@ -332,29 +397,41 @@ export class StudyCards {
         }
       }
     }
-    this.indexNote(note, format, sections);
+    this.indexNote(note, format, sections, undefined, updateKnown);
+  }
+
+  private async scanIndex(write: boolean) {
+    const paths = new Set(this.vault.markdownFiles());
+    for (const path of this.index.keys()) if (!paths.has(path)) this.removeFromIndex(path);
+    for (const path of paths) await this.reconcile(path, write, undefined, write);
   }
 
   scan() {
-    return this.run(async () => {
-      const paths = new Set(this.vault.markdownFiles());
-      for (const path of this.index.keys()) if (!paths.has(path)) this.removeFromIndex(path);
-      for (const path of paths) await this.reconcile(path);
-    });
+    return this.run("Обновление каталога", () => this.scanIndex(true), { background: true });
   }
 
   update(path: string) {
-    return this.run(() => this.reconcile(path));
+    return this.run("Обновление заметки", () => this.reconcile(path), { background: true });
+  }
+
+  refreshSources() {
+    return this.enqueue(async () => { this.notify(); });
   }
 
   delete(path: string) {
-    return this.run(async () => {
+    return this.run("Удаление заметки", async () => {
       for (const key of this.index.keys()) if (hasPath(key, path)) this.removeFromIndex(key);
-    });
+      if (this.data.sections.some(({ sources }) => sources.some((source) => hasPath(source.path, path)))) this.revision++;
+    }, { background: true });
   }
 
   rename(oldPath: string, newPath: string) {
-    return this.run(async () => {
+    return this.run("Перемещение источника", async () => {
+      if (this.storage.problem) {
+        this.revision++;
+        await this.scanIndex(false);
+        return;
+      }
       for (const section of this.data.sections) {
         for (const source of section.sources) {
           source.path = remapPath(source.path, oldPath, newPath);
@@ -371,45 +448,52 @@ export class StudyCards {
       for (const path of this.vault.markdownFiles()) {
         if (hasPath(path, newPath)) await this.reconcile(path);
       }
-    });
+    }, { background: true });
   }
 
-  private allCards() {
-    const cards = [...this.index.values()].flatMap((entry) => entry.cards);
+  private allCards(data = this.data, index = this.index) {
+    const cards = [...index.values()].flatMap((entry) => entry.cards);
     const counts = new Map<string, number>();
     for (const card of cards) if (card.id) counts.set(card.id, (counts.get(card.id) ?? 0) + 1);
     return cards.map((card): Card => card.id ? {
       ...card,
       identity: counts.get(card.id)! > 1 ? "duplicate" : "valid",
-      progress: counts.get(card.id) === 1 ? this.data.progress[card.id] : undefined,
+      progress: counts.get(card.id) === 1 ? data.progress[card.id] : undefined,
     } : card);
   }
 
   cards(sectionId: string, order?: "source") {
-    const cards = this.allCards().filter((card) => this.index.get(card.path)?.sections.includes(sectionId));
+    const { data, index } = this.catalog;
+    const cards = this.allCards(data, index).filter((card) => index.get(card.path)?.sections.includes(sectionId));
     if (order !== "source") return cards;
-    const sources = this.section(sectionId).sources;
+    const sources = this.section(sectionId, data).sources;
     const positions = new Map<string, number>();
     for (const { path } of cards) {
       if (positions.has(path)) continue;
-      const membership = this.memberships(path, this.index.get(path)!.note).find(({ section }) => section === sectionId);
+      const membership = this.memberships(path, index.get(path)!.note, data).find(({ section }) => section === sectionId);
       positions.set(path, membership ? sources.indexOf(membership.source) : sources.length);
     }
     return cards.sort((left, right) => positions.get(left.path)! - positions.get(right.path)!
       || left.path.localeCompare(right.path) || left.index - right.index);
   }
 
+  missingSources(sectionId: string) {
+    const files = new Set(this.vault.markdownFiles());
+    return this.section(sectionId, this.catalog.data).sources.filter((source) =>
+      source.kind === "file" ? !files.has(source.path) : !this.vault.folderExists(source.path));
+  }
+
   errors(sectionId: string) {
-    return [...this.index.entries()].flatMap(([path, entry]) =>
+    return [...this.catalog.index.entries()].flatMap(([path, entry]) =>
       entry.error && entry.sections.includes(sectionId) ? [{ path, message: entry.error }] : []);
   }
 
   duplicates(id: string) {
-    return this.allCards().filter((card) => card.id === id && card.identity === "duplicate");
+    return this.allCards(this.catalog.data, this.catalog.index).filter((card) => card.id === id && card.identity === "duplicate");
   }
 
   canTrash(card: Card) {
-    return this.index.get(card.path)?.format.mode === "single";
+    return this.catalog.index.get(card.path)?.format.mode === "single";
   }
 
   private currentCard(selected: Card) {
@@ -421,30 +505,122 @@ export class StudyCards {
   }
 
   setStatus(selected: Card, status: Status) {
-    return this.run(async () => {
+    return this.run("Изменение статуса освоения", async () => {
       const { entry } = this.currentCard(selected);
       const saved = await this.write(entry.note, (note) => note.setStatus(entry.format, selected.index, status));
       await this.reconcile(selected.path, false, saved);
     });
   }
 
+  private async verifyCard(selected: Card) {
+    const { entry } = this.currentCard(selected);
+    const current = this.allCards().find((card) => card.path === selected.path && card.index === selected.index);
+    if (!current?.id || current.identity !== "valid" || current.status === "invalid") {
+      throw new Error("Исправьте UUID и статус освоения карточки");
+    }
+    const note = await this.read(current.path);
+    if (!note || note.source !== entry.note.source || this.vault.hasUnsavedChanges(current.path, note.source)) {
+      throw new ChangedNote(current.path);
+    }
+    return current.id;
+  }
+
   saveProgress(selected: Card, progress: CardProgress) {
-    return this.run(async () => {
-      const { entry } = this.currentCard(selected);
-      const current = this.allCards().find((card) => card.path === selected.path && card.index === selected.index);
-      if (!current?.id || current.identity !== "valid" || current.status === "invalid") {
-        throw new Error("Исправьте UUID и статус освоения карточки");
-      }
-      const note = await this.read(current.path);
-      if (!note || note.source !== entry.note.source || this.vault.hasUnsavedChanges(current.path, note.source)) {
-        throw new ChangedNote(current.path);
-      }
-      this.data.progress[current.id] = { ...this.data.progress[current.id], ...progress };
+    return this.run("Изменение прогресса карточки", async () => {
+      const id = await this.verifyCard(selected);
+      if (JSON.stringify(selected.progress) !== JSON.stringify(this.data.progress[id])) throw new StaleStudyState();
+      this.data.progress[id] = { ...this.data.progress[id], ...progress };
     });
   }
 
+  recordReview(mutation: ProgressMutation, selected: Card,
+    review: Omit<IntervalReview, "id" | "previousSchedule" | "order">, schedule: ReviewSchedule) {
+    return this.run("Интервальная оценка", async () => {
+      const id = await this.verifyCard(selected);
+      const prior = this.data.progress[id];
+      if (!this.index.get(selected.path)?.sections.includes(review.sectionId) || prior?.suspended) {
+        throw new StaleStudyState();
+      }
+      const order = (this.lastReview(review.sessionId)?.order ?? 0) + 1;
+      this.data.progress[id] = {
+        ...prior, schedule,
+        reviews: [...(prior?.reviews ?? []), { ...review, id: mutation.id, order, previousSchedule: prior?.schedule }],
+      };
+    }, { mutation });
+  }
+
+  private lastReview(sessionId: string) {
+    let last: IntervalReview | undefined;
+    for (const { reviews } of Object.values(this.data.progress)) {
+      for (const review of reviews ?? []) {
+        if (review.sessionId === sessionId && (!last || review.order > last.order)) last = review;
+      }
+    }
+    return last;
+  }
+
+  undoReview(mutation: ProgressMutation, uuid: string, sessionId: string, reviewId: string) {
+    return this.run("Отмена интервальной оценки", async () => {
+      const prior = this.data.progress[uuid];
+      const latest = prior?.reviews?.[prior.reviews.length - 1];
+      if (!prior?.reviews || !latest || latest.id !== reviewId || this.lastReview(sessionId)?.id !== reviewId) {
+        throw new StaleStudyState();
+      }
+      this.data.progress[uuid] = { ...prior, schedule: latest.previousSchedule, reviews: prior.reviews.slice(0, -1) };
+    }, { mutation });
+  }
+
+  setSuspended(mutation: ProgressMutation, selected: Card, suspended: boolean) {
+    return this.run(suspended ? "Приостановка повторений" : "Возобновление повторений", async () => {
+      const id = await this.verifyCard(selected);
+      this.data.progress[id] = { ...this.data.progress[id], suspended };
+    }, { mutation });
+  }
+
+  freeCheckQuestions() {
+    const session = this.catalog.data.freeSession;
+    if (!session) return [];
+    const cards = new Map(this.cards(session.sectionId).filter(({ identity }) => identity === "valid")
+      .map((card) => [card.id, card]));
+    return session.cardIds.map((id) => ({ id, card: cards.get(id) ?? null, grade: session.grades[id] ?? null }));
+  }
+
+  saveFreeCheck(mutation: ProgressMutation, session: FreeSession) {
+    return this.run("Сохранение свободной проверки", async () => {
+      const previous = this.data.freeSession;
+      if (previous && (previous.id !== session.id || previous.sectionId !== session.sectionId
+        || previous.startedAt !== session.startedAt || previous.retryOf !== session.retryOf
+        || JSON.stringify(previous.cardIds) !== JSON.stringify(session.cardIds))) throw new StaleStudyState();
+      const cards = this.allCards().filter((card) => this.index.get(card.path)?.sections.includes(session.sectionId));
+      for (const [id, grade] of Object.entries(session.grades)) {
+        if (previous?.grades[id] === grade) continue;
+        const card = cards.find((item) => item.id === id);
+        if (!card) throw new Error("Вопрос пока недоступен.");
+        await this.verifyCard(card);
+      }
+      this.data.freeSession = structuredClone(session);
+    }, { mutation });
+  }
+
+  finishFreeCheck(mutation: ProgressMutation, sessionId: string, finishedAt: string) {
+    return this.run("Завершение свободной проверки", async () => {
+      const session = this.data.freeSession;
+      if (!session || session.id !== sessionId) throw new StaleStudyState();
+      const { position: _position, ...result } = session;
+      if (Object.keys(result.grades).length) this.data.freeResults.push({ ...result, finishedAt });
+      this.data.freeSession = null;
+    }, { mutation });
+  }
+
+  discardFreeCheck(mutation: ProgressMutation, sessionId: string) {
+    return this.run("Отказ от свободной проверки", async () => {
+      if (this.data.freeSession?.id !== sessionId) throw new StaleStudyState();
+      this.data.freeSession = null;
+    }, { mutation });
+  }
+
   repairId(selected: Card) {
-    return this.run(async () => {
+    return this.run("Исправление UUID", async () => {
       const { entry, card } = this.currentCard(selected);
       if (card.id) throw new Error("У карточки уже есть UUID");
       const saved = await this.write(entry.note, (note) => note.setId(entry.format, card.index, this.newId()));
@@ -453,7 +629,7 @@ export class StudyCards {
   }
 
   resolveDuplicate(keep: Card, change: Card, action: "new-id" | "trash") {
-    return this.run(async () => {
+    return this.run("Разрешение конфликта UUID", async () => {
       const winner = this.currentCard(keep);
       const { entry, card } = this.currentCard(change);
       if (!winner.card.id || winner.card.id !== card.id || (keep.path === change.path && keep.index === change.index)) {
@@ -479,7 +655,7 @@ export class StudyCards {
   }
 
   createCard(sectionId: string, filename: string, folder: string, format: Format, template: boolean) {
-    return this.run(async () => {
+    return this.run("Создание карточки", async () => {
       const section = this.section(sectionId);
       const name = filename.trim().replace(/\.md$/i, "");
       if (!name || name === "." || name === ".." || /[\\/:*?"<>|\r\n]/.test(name)) {
@@ -496,15 +672,15 @@ export class StudyCards {
     });
   }
 
-  preview(sectionId: string, requests: SourceRequest[]) {
-    this.section(sectionId);
+  preview(sectionId: string, requests: SourceRequest[], replaceSourceId?: string) {
+    this.section(sectionId, this.catalog.data);
     return new EnrollmentPreview(requests.map((request) => ({ ...request })),
-      (sources, getChoice, previous, affected) => this.plan(sectionId, sources, getChoice, previous, affected),
-      (sources, rows, getChoice) => this.run(() => this.enroll(sectionId, sources, rows, getChoice)));
+      (sources, getChoice, previous, affected) => this.plan(sectionId, sources, getChoice, this.catalog.data, previous, affected),
+      (sources, rows, getChoice) => this.run("Подключение источников", () => this.enroll(sectionId, sources, rows, getChoice, replaceSourceId)));
   }
 
   private async plan(sectionId: string, requests: SourceRequest[], getChoice: PreviewChoice,
-    previous: PlannedRow[] = [], affected?: ReadonlySet<string>) {
+    data: StudyData, previous: PlannedRow[] = [], affected?: ReadonlySet<string>) {
     const paths = this.vault.markdownFiles().sort((a, b) => a.localeCompare(b));
     const rows: PlannedRow[] = [];
     const changedPaths = affected ? [...affected] : [];
@@ -527,7 +703,7 @@ export class StudyCards {
       if (!note) continue;
       const items = sources.map((source) => {
         const request = requests[source]!;
-        const existing = request.kind === "folder" && this.section(sectionId).sources.some((item) =>
+        const existing = request.kind === "folder" && this.section(sectionId, data).sources.some((item) =>
           item.kind === "folder" && item.path === request.path && item.excluded.includes(path));
         const choice = getChoice(source, path);
         return {
@@ -536,13 +712,13 @@ export class StudyCards {
         };
       });
       const defaults = [
-        ...this.memberships(path, note).map(({ source }) => source.format),
+        ...this.memberships(path, note, data).map(({ source }) => source.format),
         ...items.filter(({ checked }) => checked).map(({ source }) => requests[source]!.format ?? single),
       ];
       const chosen = items.find(({ checked, choice }) => checked && choice.format)?.choice.format;
       const dirty = this.vault.hasUnsavedChanges(path, note.source);
       for (const { source, checked, choice, excluded } of items) {
-        const formats = this.formats(note, defaults.length ? defaults : [requests[source]!.format ?? single]);
+        const formats = this.formats(note, defaults.length ? defaults : [requests[source]!.format ?? single], data);
         const choiceFormat = chosen ?? choice.format;
         const selected = formats.find((item) => choiceFormat && sameFormat(item, choiceFormat));
         const cards = note.error ? [] : note.cards(selected ?? formats[0]!).map((card) => ({
@@ -559,12 +735,18 @@ export class StudyCards {
     return rows;
   }
 
-  private async enroll(sectionId: string, requests: SourceRequest[], rows: PlannedRow[], getChoice: PreviewChoice) {
+  private async enroll(sectionId: string, requests: SourceRequest[], rows: PlannedRow[], getChoice: PreviewChoice,
+    replaceSourceId?: string) {
     const section = this.section(sectionId);
+    const replaced = section.sources.find(({ id }) => id === replaceSourceId);
+    if (replaceSourceId && (!replaced || requests.length !== 1 || requests[0]?.kind !== replaced.kind)) {
+      throw new StaleStudyState();
+    }
     const missingFolders = () => requests.flatMap(({ kind, path }) =>
       kind === "folder" && !this.vault.folderExists(path) ? [path] : []);
-    const latest = await this.plan(sectionId, requests, getChoice);
+    const latest = await this.plan(sectionId, requests, getChoice, this.data);
     const stale = new Set(missingFolders());
+    if (replaced && requests[0]?.kind === "file" && !latest.some(({ checked }) => checked)) stale.add(requests[0].path);
     const key = ({ path, source }: PlannedRow) => JSON.stringify([source, path]);
     const baseline = new Map(rows.map((row) => [key(row), row]));
     for (const row of latest) {
@@ -596,7 +778,7 @@ export class StudyCards {
       if (request.kind === "file" && !matches.some(({ checked }) => checked)) return;
       const previous = section.sources.find(({ kind, path }) => request.kind === kind && request.path === path);
       const source: Source = {
-        id: previous?.id ?? this.newId(), kind: request.kind, path: request.path,
+        id: previous?.id ?? replaced?.id ?? this.newId(), kind: request.kind, path: request.path,
         recursive: request.kind === "folder" && request.recursive === true,
         format: request.format ?? single,
         excluded: [...new Set([
@@ -604,7 +786,7 @@ export class StudyCards {
           ...matches.filter(({ excluded }) => excluded).map(({ path }) => path),
         ])],
       };
-      section.sources = [...section.sources.filter(({ id }) => id !== source.id), source];
+      section.sources = [...section.sources.filter(({ id }) => id !== source.id && id !== replaceSourceId), source];
     });
     const paths = new Set([...this.index.keys(), ...latest.map(({ path }) => path)]);
     for (const path of paths) await this.reconcile(path);

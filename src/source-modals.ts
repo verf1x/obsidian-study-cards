@@ -1,6 +1,6 @@
 import { FuzzySuggestModal, Modal, Notice, TFile, TFolder, type App, type TAbstractFile } from "obsidian";
 import { single, type Format } from "./markdown";
-import { remapPath, type EnrollmentPreview, type PreviewRow, type SourceRequest, type StudyCards } from "./study-cards";
+import { remapPath, type EnrollmentPreview, type PreviewRow, type Source, type SourceRequest, type StudyCards } from "./study-cards";
 
 export type VaultChange = { path: string; oldPath?: string };
 export type WatchVault = (listener: (change: VaultChange) => void) => () => void;
@@ -18,19 +18,19 @@ function pathName(path: string) {
   return path || "Корень хранилища";
 }
 
-function picker(app: App, foldersOnly: boolean, select: (source: SourceRequest) => void) {
+function picker(app: App, kind: SourceRequest["kind"] | undefined, select: (source: SourceRequest) => void) {
   class Picker extends FuzzySuggestModal<SourceRequest> {
     getItems() {
       const files = [app.vault.getRoot(), ...app.vault.getAllLoadedFiles()];
       const items = files.flatMap((file) => sourceRequest(file) ?? []);
-      return [...new Map(items.filter((item) => !foldersOnly || item.kind === "folder")
+      return [...new Map(items.filter((item) => !kind || item.kind === kind)
         .map((item) => [item.path, item])).values()];
     }
     getItemText(item: SourceRequest) { return pathName(item.path); }
     onChooseItem(item: SourceRequest) { select(item); }
   }
   const modal = new Picker(app);
-  modal.setPlaceholder(foldersOnly ? "Найти папку" : "Найти файл или папку");
+  modal.setPlaceholder(kind === "folder" ? "Найти папку" : kind === "file" ? "Найти заметку" : "Найти файл или папку");
   modal.open();
 }
 
@@ -71,13 +71,14 @@ export class SelectSourcesModal extends Modal {
   private unsubscribe?: () => void;
 
   constructor(app: App, private readonly study: StudyCards, private readonly watch: WatchVault,
-    private readonly section: string, initial: SourceRequest[], private readonly lockSelection = false) {
+    private readonly section: string, initial: SourceRequest[], private readonly lockSelection = false,
+    private readonly replacement?: Source) {
     super(app);
     this.requests = initial.map((request) => ({ ...request }));
   }
 
   onOpen() {
-    this.setTitle(this.lockSelection ? "Настроить источник" : "Добавить источники");
+    this.setTitle(this.replacement ? "Переподключить источник" : this.lockSelection ? "Настроить источник" : "Добавить источники");
     this.contentEl.addClass("study-cards-source-modal");
     this.unsubscribe = this.watch(({ path, oldPath }) => {
       if (!oldPath) return;
@@ -104,7 +105,7 @@ export class SelectSourcesModal extends Modal {
       const item = this.contentEl.createDiv({ cls: "study-cards-item" });
       const headline = item.createDiv({ cls: "study-cards-controls" });
       headline.createEl("strong", { text: pathName(source.path) });
-      if (!this.lockSelection) {
+      if (!this.lockSelection && !this.replacement) {
         const remove = headline.createEl("button", { text: "Убрать", attr: { "aria-label": "Убрать " + pathName(source.path) } });
         remove.onclick = () => {
           this.requests.splice(index, 1);
@@ -123,10 +124,11 @@ export class SelectSourcesModal extends Modal {
     const actions = this.contentEl.createDiv({ cls: "study-cards-controls" });
     if (!this.lockSelection) {
       const pick = actions.createEl("button", {
-        text: "Выбрать файл или папку", cls: this.requests.length ? undefined : "mod-cta",
+        text: this.replacement ? "Выбрать новый путь" : "Выбрать файл или папку", cls: this.requests.length ? undefined : "mod-cta",
       });
-      pick.onclick = () => picker(this.app, false, (source) => {
-        if (!this.requests.some(({ path, kind }) => path === source.path && kind === source.kind)) this.requests.push(source);
+      pick.onclick = () => picker(this.app, this.replacement?.kind, (source) => {
+        if (this.replacement) this.requests.splice(0, 1, { ...this.replacement, ...source });
+        else if (!this.requests.some(({ path, kind }) => path === source.path && kind === source.kind)) this.requests.push(source);
         this.render();
       });
     }
@@ -134,7 +136,7 @@ export class SelectSourcesModal extends Modal {
     const next = actions.createEl("button", { text: "Предпросмотр", cls: "mod-cta" });
     next.onclick = () => {
       try {
-        const preview = this.previousPreview ?? this.study.preview(this.section, this.requests);
+        const preview = this.previousPreview ?? this.study.preview(this.section, this.requests, this.replacement?.id);
         if (this.previousPreview) preview.replaceSources(this.requests);
         const modal = new PreviewModal(this.app, this.watch, preview, this.lockSelection ? "Сохранить" : "Подключить", () => {
           this.previousPreview = preview;
@@ -304,7 +306,7 @@ export class CreateCardModal extends Modal {
     const destination = form.createDiv({ cls: "study-cards-controls" });
     destination.createSpan({ text: "Папка" });
     const folderButton = destination.createEl("button", { type: "button", text: pathName(folder) });
-    folderButton.onclick = () => picker(this.app, true, (item) => {
+    folderButton.onclick = () => picker(this.app, "folder", (item) => {
       folder = item.path;
       folderButton.textContent = pathName(folder);
     });
