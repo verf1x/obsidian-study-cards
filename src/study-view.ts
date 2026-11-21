@@ -9,8 +9,8 @@ export class StudyView extends ItemView {
   private unsubscribe?: () => void;
   private answers = new Component();
 
-  constructor(leaf: WorkspaceLeaf, private readonly study: StudyCards, private readonly watch: WatchVault,
-    private readonly openNote: (path: string) => Promise<void>) {
+  constructor(leaf: WorkspaceLeaf, protected readonly study: StudyCards, private readonly watch: WatchVault,
+    protected readonly openNote: (path: string) => Promise<void>) {
     super(leaf);
   }
 
@@ -28,13 +28,14 @@ export class StudyView extends ItemView {
     this.removeChild(this.answers);
   }
 
-  private render() {
+  protected render() {
     const root = this.contentEl;
     const opened = new Set([...root.querySelectorAll("details[open]")].map((item) => item.getAttribute("data-card")));
     this.removeChild(this.answers);
     this.answers = this.addChild(new Component());
     root.empty();
     root.addClass("study-cards-view");
+    if (this.renderAlternateScreen(root)) return;
 
     const toolbar = root.createDiv({ cls: "study-cards-controls" });
     const sectionId = this.study.activeSection;
@@ -52,8 +53,9 @@ export class StudyView extends ItemView {
     }
     toolbar.createEl("button", { text: "Добавить источники" }).onclick =
       () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open();
-    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta" }).onclick =
+    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta study-cards-create" }).onclick =
       () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open();
+    this.renderSectionActions(root, section.id, section.name);
 
     const sources = root.createEl("details", { attr: { "data-card": "sources" } });
     sources.open = opened.has("sources");
@@ -67,26 +69,55 @@ export class StudyView extends ItemView {
       }
       row.createEl("button", { text: "Отключить" }).onclick = () => this.perform(this.study.removeSource(section.id, source.id));
     }
-    const cards = this.study.cards(section.id);
-    root.createEl("h3", { text: "Карточки · " + cards.length });
-    for (const { path, message } of this.study.errors(section.id)) {
+    this.renderCatalog(root, section.id, opened);
+  }
+
+  protected renderAlternateScreen(_root: HTMLElement): boolean { return false; }
+
+  protected renderSectionActions(_root: HTMLElement, _sectionId: string, _name: string) {}
+
+  protected renderErrors(root: HTMLElement, sectionId: string) {
+    for (const { path, message } of this.study.errors(sectionId)) {
       const error = root.createDiv({ cls: "study-cards-item" });
       error.createEl("p", { text: path + " · " + message });
       error.createEl("button", { text: "Открыть заметку" }).onclick = () => this.perform(this.openNote(path));
       error.createEl("button", { text: "Предпросмотр подключения" }).onclick = () =>
-        new SelectSourcesModal(this.app, this.study, this.watch, section.id, [{ kind: "file", path }]).open();
+        new SelectSourcesModal(this.app, this.study, this.watch, sectionId, [{ kind: "file", path }]).open();
     }
+  }
+
+  protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
+    const cards = this.study.cards(sectionId);
+    root.createEl("h3", { text: "Карточки · " + cards.length });
+    this.renderErrors(root, sectionId);
     for (const card of cards) {
-      const key = card.path + ":" + (card.id ?? "") + ":" + card.index;
+      const key = this.cardKey(card);
       this.renderCard(root, card, key, opened.has(key));
     }
   }
 
-  private renderCard(root: HTMLElement, card: Card, key: string, open: boolean) {
+  protected cardKey(card: Card) { return card.path + ":" + (card.id ?? "") + ":" + card.index; }
+
+  protected renderCard(root: HTMLElement, card: Card, key: string, open: boolean) {
     const details = root.createEl("details", { cls: "study-cards-item", attr: { "data-card": key } });
     details.open = open;
-    details.createEl("summary", { text: card.question });
-    const actions = details.createDiv({ cls: "study-cards-controls" });
+    const summary = details.createEl("summary", { text: card.question });
+    this.renderCardSummary(summary, card);
+    const body = details.createDiv();
+    let rendered = false;
+    const renderAnswer = () => {
+      if (rendered || !details.open) return;
+      rendered = true;
+      this.renderCardBody(body, card);
+    };
+    details.ontoggle = renderAnswer;
+    renderAnswer();
+  }
+
+  protected renderCardSummary(_summary: HTMLElement, _card: Card) {}
+
+  protected renderCardBody(root: HTMLElement, card: Card) {
+    const actions = root.createDiv({ cls: "study-cards-controls" });
     actions.createEl("button", { text: card.path, attr: { "aria-label": "Открыть заметку " + card.path } }).onclick =
       () => this.perform(this.openNote(card.path));
     const select = actions.createEl("label", { text: "Статус освоения " }).createEl("select");
@@ -109,24 +140,21 @@ export class StudyView extends ItemView {
       actions.createEl("button", { text: "Создать новый ID" }).onclick = () => this.perform(this.study.repairId(card));
     }
 
-    const answer = details.createDiv();
-    let rendered = false;
-    const renderAnswer = () => {
-      if (rendered || !details.open) return;
-      rendered = true;
-      this.perform(MarkdownRenderer.render(this.app, card.answer, answer, card.path, this.answers));
-    };
-    details.ontoggle = renderAnswer;
-    renderAnswer();
+    this.renderMarkdown(root.createDiv(), card);
     if (card.progress) {
-      const results = details.createEl("details");
+      const results = root.createEl("details");
       results.createEl("summary", { text: "Результаты и расписание" });
       if (card.progress.history !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.history, null, 2) });
       if (card.progress.schedule !== undefined) results.createEl("pre", { text: JSON.stringify(card.progress.schedule, null, 2) });
     }
   }
 
-  private perform(promise: Promise<unknown>) {
+  protected renderMarkdown(root: HTMLElement, card: Card) {
+    return MarkdownRenderer.render(this.app, card.answer, root, card.path, this.answers)
+      .catch((error) => new Notice(message(error)));
+  }
+
+  protected perform(promise: Promise<unknown>) {
     void promise.catch((error) => new Notice(message(error)));
   }
 }

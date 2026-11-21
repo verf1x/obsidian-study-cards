@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile, type TAbstractFile } from "obsidian";
+import { Notice, Plugin, TFile, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
 import { studyVault } from "./obsidian-vault";
 import { message, SelectSourcesModal, sourceRequest, type VaultChange, type WatchVault } from "./source-modals";
 import { StudyCards, type SourceRequest } from "./study-cards";
@@ -17,7 +17,7 @@ export default class StudyCardsPlugin extends Plugin {
   async onload() {
     this.study = new StudyCards(studyVault(this.app), await this.loadData(),
       (data) => this.saveData(data), () => globalThis.crypto.randomUUID());
-    this.registerView(viewType, (leaf) => new StudyView(leaf, this.study, this.watch, this.openNote));
+    this.registerView(viewType, (leaf) => this.createView(leaf, this.study, this.watch, this.openNote));
     this.addRibbonIcon("book-open", "Study Cards", () => this.perform(this.showView()));
     this.addCommand({ id: "open-study-cards", name: "Открыть Study Cards", callback: () => this.perform(this.showView()) });
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
@@ -53,6 +53,10 @@ export default class StudyCardsPlugin extends Plugin {
       this.perform(this.study.scan());
     });
     this.register(() => { this.stopped = true; });
+  }
+
+  protected createView(leaf: WorkspaceLeaf, study: StudyCards, watch: WatchVault, openNote: (path: string) => Promise<void>) {
+    return new StudyView(leaf, study, watch, openNote);
   }
 
   private changed(change: VaultChange, update: Promise<unknown>) {

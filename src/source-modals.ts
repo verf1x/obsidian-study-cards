@@ -76,6 +76,7 @@ export class SelectSourcesModal extends Modal {
 
   onOpen() {
     this.setTitle("Добавить источники");
+    this.contentEl.addClass("study-cards-source-modal");
     this.render();
   }
 
@@ -92,7 +93,7 @@ export class SelectSourcesModal extends Modal {
         };
       }
       if (source.kind === "folder") {
-        const label = item.createEl("label");
+        const label = item.createEl("label", { cls: "study-cards-source-choice" });
         const check = label.createEl("input", { type: "checkbox" });
         label.appendText(" Включить подпапки");
         check.checked = source.recursive ?? false;
@@ -140,6 +141,7 @@ class PreviewModal extends Modal {
   onOpen() {
     this.openNow = true;
     this.setTitle("Предпросмотр подключения");
+    this.contentEl.addClass("study-cards-source-modal");
     this.contentEl.createEl("p", { text: "У выбранных заметок будут записаны свойства Study Cards и недостающие UUID. Новые карточки в этих источниках получат UUID автоматически." });
     this.list = this.contentEl.createDiv();
     this.feedback = this.contentEl.createEl("p", { attr: { role: "status" } });
@@ -209,7 +211,7 @@ class PreviewModal extends Modal {
       if (!items.length) group.createEl("p", { text: source.kind === "folder" ? "В папке пока нет Markdown-заметок" : "Заметка не найдена" });
       for (const row of items) {
         const item = group.createDiv({ cls: "study-cards-item" });
-        const label = item.createEl("label");
+        const label = item.createEl("label", { cls: "study-cards-source-choice" });
         const key = String(index) + ":" + row.path;
         const check = label.createEl("input", { type: "checkbox", attr: { "data-focus": key } });
         if (focused === key) check.focus();
