@@ -598,6 +598,7 @@ test("свободная проверка сохраняет исправлен�
 
   vault.beforePersist();
   const retry = { id: randomUUID(), sectionId, startedAt: finishedAt, retryOf: session.id, cardIds: [first], position: 0, grades: {} };
+  await study.setStatus(study.cards(sectionId).find(({ id }) => id === first)!, "studied");
   const retryCard = study.cards(sectionId).find(({ id }) => id === first)!;
   await study.recordReview(mutation(), retryCard,
     { sectionId, sessionId: randomUUID(), at: finishedAt, grade: "hard" }, { dueAt: "2026-11-24T11:00:00Z" });

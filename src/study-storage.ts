@@ -161,6 +161,7 @@ function operationFailed(error: unknown) {
 export class StudyStorage {
   private queue = Promise.resolve<unknown>(undefined);
   private raw: string | null | undefined;
+  private awaitingCheckpoint = false;
   private current: StorageState = { revision: null, token: 0, data: emptyStudyData(), problem: null };
   private readonly imports = new WeakMap<ImportPreview, { snapshot: Snapshot; id: string }>();
 
@@ -365,7 +366,7 @@ export class StudyStorage {
   }
 
   private async readLatest(startup = false) {
-    await this.observe(await this.io.readShared(), startup);
+    await this.observe(await this.io.readShared(), startup || this.awaitingCheckpoint);
   }
 
   private availableVersions(device: DeviceState) {
@@ -374,7 +375,7 @@ export class StudyStorage {
       .filter((item) => item !== null).map((item) => [item.id, item])).values()];
   }
 
-  private async settlePending(device: DeviceState, incoming: Snapshot | null, raw: string | null, startup: boolean) {
+  private async settlePending(device: DeviceState, incoming: Snapshot | null, raw: string | null, interrupted: boolean) {
     let next = device;
     const { pending, uncertain, migration } = next;
     if (incoming && uncertain) {
@@ -393,14 +394,14 @@ export class StudyStorage {
     // Only a matching shared version can confirm a write that was interrupted at the device checkpoint.
     // If sync changed the file before we could check, keep the tentative copy for an explicit choice.
     if (!pending.retryable && migration?.id !== id
-      && (await fingerprint(raw) !== pending.base || (startup && raw === null))) {
+      && (interrupted || await fingerprint(raw) !== pending.base)) {
       return { ...next, pending: null, uncertain: pending };
     }
     return next;
   }
 
-  private async observe(raw: string | null, startup = false) {
-    if (raw === this.raw) return;
+  private async observe(raw: string | null, interrupted = false) {
+    if (raw === this.raw && !interrupted) return;
     let next = this.device;
     let incoming: Snapshot | null = null;
     let problem: StorageProblem | null = null;
@@ -424,7 +425,7 @@ export class StudyStorage {
       }
     }
 
-    next = await this.settlePending(next, incoming, raw, startup);
+    next = await this.settlePending(next, incoming, raw, interrupted);
     if (incoming) {
       let migration = next.migration;
       if (migration && JSON.stringify(canonical(migration.data)) === JSON.stringify(canonical(incoming.data))) migration = null;
@@ -449,6 +450,7 @@ export class StudyStorage {
 
     if (next !== this.device) await this.saveDevice(next);
     this.raw = raw;
+    this.awaitingCheckpoint = false;
     const head = next.head ?? next.migration;
     this.current = { revision: head?.id ?? null, token: this.current.token + 1, data: head?.data ?? emptyStudyData(), problem };
   }
@@ -472,6 +474,7 @@ export class StudyStorage {
       if (this.raw !== expected && this.current.problem?.kind !== "recovery") throw new StaleStudyState();
       throw operationFailed(error);
     }
+    this.awaitingCheckpoint = true;
     try {
       await this.observe(serialize(snapshot));
     } catch (error) {

@@ -284,3 +284,31 @@ test("прежние локальные данные рядом с общим ф
   assert.equal(first.problem, null);
   assert.deepEqual(first.state.data.sections, [section]);
 });
+
+test("точная копия предшественника не скрывает запись с прерванным подтверждением", async (t) => {
+  for (const reopening of [false, true]) {
+    await t.test(reopening ? "после запуска" : "в открытом плагине", async () => {
+      const file = { raw: null as string | null };
+      const desktop = device(file);
+      let store = await desktop.open();
+      const add = (name: string) => store.commit({ id: randomUUID(), revision: store.state.revision, action: name },
+        (draft) => { draft.sections.push({ id: randomUUID(), name, sources: [] }); });
+      await add("Первая запись");
+      const predecessor = file.raw;
+      desktop.beforeWrite((apply) => { apply(); desktop.failNextDeviceWrite(); });
+      await assert.rejects(add("Прерванное подтверждение"), /Повторите действие/);
+      assert.notEqual(file.raw, predecessor);
+      file.raw = predecessor;
+      desktop.beforeWrite();
+      if (reopening) store = await desktop.open();
+      else await store.refresh();
+      const issue = store.problem;
+      assert.equal(issue?.kind, "conflict");
+      const candidate = issue?.versions.find(({ action }) => action === "Прерванное подтверждение");
+      assert.equal(candidate?.unconfirmed, true);
+      await assert.rejects(add("Посторонняя запись"), /Выберите рабочую версию/);
+      await store.choose(store.state.token, candidate!.id);
+      assert.deepEqual(store.state.data.sections.map(({ name }) => name), ["Первая запись", "Прерванное подтверждение"]);
+    });
+  }
+});
