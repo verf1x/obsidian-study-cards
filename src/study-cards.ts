@@ -673,8 +673,17 @@ export class StudyCards {
   }
 
   async startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
-    if ("cardIds" in selection) {
-      await this.run("refreshCatalog", () => this.scanIndex(false), { background: true });
+    const selected = "cardIds" in selection ? new Set(selection.cardIds) : null;
+    if (selected) {
+      if (!selected.size) throw new Error(t("selectAtLeastOneCheckCard"));
+      await this.run("refreshCatalog", async () => {
+        await this.scanIndex(false);
+        const paths = new Set(this.allCards().filter(isCheckCard)
+          .filter(({ id }) => selected.has(id)).map(({ path }) => path));
+        await Promise.all([...paths].map((path) => this.reconcile(path, false, undefined, false)));
+        const files = new Set(this.vault.markdownFiles());
+        for (const path of paths) if (!files.has(path)) this.removeFromIndex(path);
+      }, { background: true });
     }
     return this.run("startFreeCheck", async () => {
       if ((this.data.freeSession?.id ?? null) !== previousId) throw new StaleStudyState();
@@ -689,10 +698,9 @@ export class StudyCards {
           throw new Error(t("questionCountChanged"));
         }
         cardIds = sampleCards(cards, selection.order, selection.count, offset).map(({ id }) => id);
-      } else if ("cardIds" in selection) {
-        const selected = new Set(selection.cardIds);
-        cardIds = cards.filter(({ id }) => selected.has(id)).map(({ id }) => id);
-        if (!selected.size) throw new Error(t("selectAtLeastOneCheckCard"));
+      } else if (selected) {
+        const files = new Set(this.vault.markdownFiles());
+        cardIds = cards.filter(({ id, path }) => selected.has(id) && files.has(path)).map(({ id }) => id);
         if (cardIds.length !== selected.size) throw new Error(t("selectedCardsChanged"));
       } else {
         const available = new Set(cards.map(({ id }) => id));

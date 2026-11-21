@@ -52,10 +52,10 @@ export class CardPicker {
       else notes.set(card.path, [card]);
     }
     const unavailable = [...this.selected].filter(([id]) => !available.has(id));
-    const review = this.selectedOnly.checked;
+    const showSelectedOnly = this.selectedOnly.checked;
     const query = this.search.value.trim().toLocaleLowerCase();
     this.root.disabled = saving;
-    this.search.disabled = review;
+    this.search.disabled = showSelectedOnly;
     this.clear.disabled = !this.selected.size;
     this.count.setText(t("selectedCheckCardCount", { count: this.selected.size }));
     this.warning.setText(unavailable.length ? t("selectedCardsChanged") : "");
@@ -90,7 +90,7 @@ export class CardPicker {
 
     for (const [path, note] of notes) {
       const pathMatches = path.toLocaleLowerCase().includes(query);
-      const visible = note.filter(({ id, question }) => review ? this.selected.has(id)
+      const visible = note.filter(({ id, question }) => showSelectedOnly ? this.selected.has(id)
         : pathMatches || question.toLocaleLowerCase().includes(query));
       if (!visible.length) continue;
       const group = this.list.createDiv({ cls: "study-cards-picker-note" });
@@ -115,7 +115,8 @@ export class CardPicker {
       }
     }
     if (!this.list.childElementCount) {
-      this.list.createDiv({ cls: "study-cards-picker-detail", text: t(review ? "noSelectedCheckCards" : "noMatchingCheckCards") });
+      this.list.createDiv({ cls: "study-cards-picker-detail",
+        text: t(showSelectedOnly ? "noSelectedCheckCards" : "noMatchingCheckCards") });
     }
     this.list.scrollTop = scrollTop;
     if (focusedKey && !saving) (nextFocus ?? this.selectedOnly).focus({ preventScroll: true });

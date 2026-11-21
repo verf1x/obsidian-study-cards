@@ -969,6 +969,20 @@ test("ручной выбор при запуске замечает удале�
   assert.deepEqual(study.cards(sectionId).map(({ id }) => id), [first!.id]);
 
   await vault.files.create(second!.path, saved);
-  await study.startFreeCheck(mutation(), previous.id, { sectionId, cardIds: [first!.id!, second!.id!] }, startedAt);
+  const resumed = mutation();
+  await study.startFreeCheck(resumed, previous.id, { sectionId, cardIds: [first!.id!, second!.id!] }, startedAt);
   assert.deepEqual(study.freeCheckQuestions().map(({ id }) => id), [first!.id, second!.id]);
+
+  const read = vault.files.read;
+  vault.files.read = async (path) => {
+    if (path === second!.path) {
+      vault.files.read = read;
+      await vault.delete(first!.path);
+    }
+    return read(path);
+  };
+  await assert.rejects(study.startFreeCheck(mutation(), resumed.id, { sectionId, cardIds: [first!.id!, second!.id!] }, startedAt),
+    /недоступных карточек/);
+  assert.equal(study.freeChecks.session?.id, resumed.id);
+  assert.deepEqual(study.cards(sectionId).map(({ id }) => id), [second!.id]);
 });

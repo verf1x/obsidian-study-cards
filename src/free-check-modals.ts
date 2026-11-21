@@ -2,7 +2,7 @@ import { Modal, type App } from "obsidian";
 import { CardPicker } from "./free-check-picker";
 import { t } from "./localization";
 import { message } from "./source-modals";
-import { checkRange, type CheckCard, type CheckSelection } from "./free-check";
+import { checkRange, type CheckCard, type CheckOrder, type CheckSelection } from "./free-check";
 
 type SetupSelection = Extract<CheckSelection, { sectionId: string }>;
 
@@ -22,16 +22,18 @@ export class CheckSetupModal extends Modal {
     method.createEl("option", { value: "standard", text: t("standardOrder") });
     method.createEl("option", { value: "random", text: t("randomOrder") });
     method.createEl("option", { value: "manual", text: t("selectCheckCards") });
+    const selectedMethod = () => method.value as CheckOrder | "manual";
     const ordered = form.createDiv();
     const first = ordered.createEl("p");
     const count = ordered.createEl("label", { text: t("questionCount") + " " }).createEl("input", {
       type: "number", attr: { min: "1", step: "1", required: "" },
     });
     const available = ordered.createEl("p", { attr: { "aria-live": "polite" } });
-    const picker = new CardPicker(form, this.start, () => {
+    const changeSelection = () => {
       feedback.textContent = "";
       update();
-    });
+    };
+    const picker = new CardPicker(form, this.start, changeSelection);
     const actions = form.createDiv({ cls: "study-cards-controls" });
     actions.createEl("button", { text: t("cancel"), attr: { type: "button" } }).onclick = () => this.close();
     const begin = actions.createEl("button", { text: t("startFreeCheck"), attr: { type: "submit" }, cls: "mod-cta" });
@@ -40,41 +42,38 @@ export class CheckSetupModal extends Modal {
     let saving = false;
     const update = () => {
       const cards = this.getCards();
-      const manual = method.value === "manual";
-      ordered.hidden = manual;
-      picker.root.hidden = !manual;
+      const selection = selectedMethod();
+      ordered.hidden = selection === "manual";
+      picker.root.hidden = !ordered.hidden;
       method.disabled = saving;
-      if (manual) {
+      if (selection === "manual") {
         count.disabled = true;
         begin.disabled = !picker.update(cards, saving) || saving;
         return;
       }
-      const random = method.value === "random";
-      const { offset, maximum } = checkRange(cards, random ? "random" : "standard", this.start?.id);
+      const { offset, maximum } = checkRange(cards, selection, this.start?.id);
       count.max = String(maximum);
       count.value = maximum ? String(Math.min(requested, maximum)) : "";
       count.disabled = begin.disabled = saving || maximum === 0;
       const firstCard = cards[offset];
-      first.textContent = random ? t("wholeSectionSelection")
+      first.textContent = selection === "random" ? t("wholeSectionSelection")
         : firstCard ? t("firstQuestion", { question: firstCard.question }) : t("startCardUnavailable");
       available.textContent = t("questionsAvailable", { count: maximum });
     };
     count.oninput = () => {
       if (Number.isInteger(count.valueAsNumber) && count.valueAsNumber > 0) requested = count.valueAsNumber;
     };
-    method.onchange = () => {
-      feedback.textContent = "";
-      update();
-    };
+    method.onchange = changeSelection;
     update();
     this.unsubscribe = this.subscribe(update);
     form.onsubmit = (event) => {
       event.preventDefault();
       if (begin.disabled || !count.checkValidity()) return;
       const sectionId = this.section.id;
-      const selection: SetupSelection = method.value === "manual"
+      const order = selectedMethod();
+      const selection: SetupSelection = order === "manual"
         ? { sectionId, cardIds: picker.cardIds }
-        : { sectionId, start: this.start?.id, count: count.valueAsNumber, order: method.value === "random" ? "random" : "standard" };
+        : { sectionId, start: this.start?.id, count: count.valueAsNumber, order };
       saving = true;
       update();
       feedback.textContent = "";
