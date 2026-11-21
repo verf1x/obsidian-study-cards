@@ -371,10 +371,16 @@ export class PrototypeView extends StudyView {
   }
 
   private confirmFinish(check: Check, focus: string) {
+    const ungraded = check.ungraded;
     const summary = "Оценено " + check.graded + " из " + check.questions.length
-      + ". Без оценки: " + check.ungraded + ".";
+      + ". Без оценки: " + ungraded + ".";
     new CheckModal(this.app, "Подтвердить итог?", summary, [{
       label: "Подтвердить итог", primary: true, action: () => {
+        if (this.checks.active !== check) return;
+        if (check.ungraded !== ungraded) {
+          this.confirmFinish(check, focus);
+          return;
+        }
         if (this.checks.finish(check)) this.showReport(check);
       },
     }], () => this.focus(focus)).open();
