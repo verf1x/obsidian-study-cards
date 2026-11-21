@@ -5,6 +5,12 @@ import type { Card, StudyCards } from "./study-cards";
 
 export const viewType = "study-cards";
 
+export interface CatalogActions {
+  createSection(): void;
+  addSources(): void;
+  createCard(): void;
+}
+
 export class StudyView extends ItemView {
   private unsubscribe?: () => void;
   private answers = new Component();
@@ -37,6 +43,7 @@ export class StudyView extends ItemView {
     if (this.renderAlternateScreen(root)) return;
 
     const toolbar = root.createDiv({ cls: "study-cards-controls" });
+    const createSection = () => new SectionModal(this.app, this.study).open();
     const sectionId = this.study.activeSection;
     const section = this.study.sections.find(({ id }) => id === sectionId);
     if (this.study.sections.length) {
@@ -46,18 +53,20 @@ export class StudyView extends ItemView {
       select.value = section?.id ?? "";
       select.onchange = () => this.perform(this.study.openSection(select.value));
     }
-    toolbar.createEl("button", { text: "Новый раздел" }).onclick = () => new SectionModal(this.app, this.study).open();
     if (!section) {
+      toolbar.createEl("button", { text: "Новый раздел" }).onclick = createSection;
       root.createEl("p", { text: "Создайте учебный раздел, чтобы добавить заметки или папки." });
       return;
     }
-    toolbar.createEl("button", { text: "Добавить источники" }).onclick =
-      () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open();
-    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta study-cards-create" }).onclick =
-      () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open();
     this.renderSectionActions(root, section.id, section.name, opened);
 
-    const sources = root.createEl("details", { attr: { "data-card": "sources" } });
+    const sourceRow = root.createDiv();
+    const sources = sourceRow.createEl("details", { attr: { "data-card": "sources" } });
+    this.renderCatalogActions(toolbar, sourceRow, {
+      createSection,
+      addSources: () => new SelectSourcesModal(this.app, this.study, this.watch, section.id, []).open(),
+      createCard: () => new CreateCardModal(this.app, this.study, section.id, this.openNote).open(),
+    });
     sources.open = opened.has("sources");
     sources.createEl("summary", { text: "Источники · " + section.sources.length });
     for (const source of section.sources) {
@@ -75,6 +84,12 @@ export class StudyView extends ItemView {
   protected renderAlternateScreen(_root: HTMLElement): boolean { return false; }
 
   protected renderSectionActions(_root: HTMLElement, _sectionId: string, _name: string, _opened: Set<string | null>) {}
+
+  protected renderCatalogActions(toolbar: HTMLElement, _sourceRow: HTMLElement, actions: CatalogActions) {
+    toolbar.createEl("button", { text: "Новый раздел" }).onclick = actions.createSection;
+    toolbar.createEl("button", { text: "Добавить источники" }).onclick = actions.addSources;
+    toolbar.createEl("button", { text: "Создать карточку", cls: "mod-cta" }).onclick = actions.createCard;
+  }
 
   protected resetAnswers() {
     this.removeChild(this.answers);

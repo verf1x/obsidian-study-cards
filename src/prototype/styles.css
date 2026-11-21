@@ -23,11 +23,6 @@
   white-space: normal;
 }
 
-.study-cards-prototype button.study-cards-create {
-  color: var(--text-normal);
-  background-color: var(--interactive-normal);
-}
-
 .study-cards-prototype :is(h1, h2, h3, p):not(:where(.study-cards-markdown *)),
 .study-cards-prototype-modal p {
   margin: 0;
@@ -97,12 +92,33 @@
   gap: 0.5rem;
 }
 
-.study-cards-prototype > .study-cards-controls > label {
+.study-cards-section-controls {
+  flex-wrap: nowrap;
+  margin-bottom: 0.45rem;
+}
+
+.study-cards-section-controls > label {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  max-width: 100%;
+  min-width: 0;
+}
+
+.study-cards-section-controls select {
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.study-cards-section-menu {
+  min-width: 44px;
+  padding-inline: 0.45rem;
+}
+
+.study-cards-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.5rem;
 }
 
 .study-cards-search-status:not(:empty) {
@@ -463,6 +479,8 @@
 }
 
 @container (max-width: 25rem) {
+  .study-cards-catalog-tools input { flex-basis: 8rem; }
+  .study-cards-catalog-tools label > span { display: none; }
   .study-cards-check-nav button { flex: 1; }
   .study-cards-counts > div { padding-inline: 0.4rem; }
   .study-cards-markdown .study-cards-table-scroll > table { font-size: 0.9em; }

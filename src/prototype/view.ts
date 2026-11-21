@@ -1,8 +1,8 @@
-import { Notice, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { statuses } from "../markdown";
 import type { WatchVault } from "../source-modals";
 import type { Card, StudyCards } from "../study-cards";
-import { StudyView } from "../study-view";
+import { StudyView, type CatalogActions } from "../study-view";
 import { Check, isCheckCard, PrototypeChecks, type CheckCard, type Grade } from "./check";
 import { CheckModal, SetupModal } from "./modals";
 
@@ -104,6 +104,26 @@ export class PrototypeView extends StudyView {
     }
   }
 
+  protected renderCatalogActions(toolbar: HTMLElement, sourceRow: HTMLElement, actions: CatalogActions) {
+    toolbar.addClass("study-cards-section-controls");
+    const more = toolbar.createEl("button", {
+      cls: "study-cards-section-menu",
+      attr: { "aria-label": "Действия раздела", "aria-haspopup": "menu", "aria-expanded": "false" },
+    });
+    setIcon(more, "ellipsis");
+    more.onclick = () => {
+      const menu = new Menu().setUseNativeMenu(false).setNoIcon();
+      menu.addItem((item) => item.setTitle("Новый раздел").onClick(actions.createSection));
+      menu.addItem((item) => item.setTitle("Создать карточку").onClick(actions.createCard));
+      menu.onHide(() => more.setAttribute("aria-expanded", "false"));
+      more.setAttribute("aria-expanded", "true");
+      const { left, bottom } = more.getBoundingClientRect();
+      menu.showAtPosition({ x: left, y: bottom }, more.ownerDocument);
+    };
+    sourceRow.addClass("study-cards-source-row");
+    sourceRow.createEl("button", { text: "Добавить источники" }).onclick = actions.addSources;
+  }
+
   protected renderCatalog(root: HTMLElement, sectionId: string, opened: Set<string | null>) {
     if (this.catalogSection !== sectionId) {
       this.catalogSection = sectionId;
@@ -121,7 +141,9 @@ export class PrototypeView extends StudyView {
       type: "search", placeholder: "Найти карточку", value: this.search,
       attr: { "aria-label": "Найти карточку", "data-focus": "search" },
     });
-    const layout = bar.createEl("label", { text: "Вид каталога" }).createEl("select", { attr: { "data-focus": "layout" } });
+    const label = bar.createEl("label");
+    label.createSpan({ text: "Вид каталога" });
+    const layout = label.createEl("select", { attr: { "aria-label": "Вид каталога", "data-focus": "layout" } });
     for (const [value, text] of Object.entries(layouts)) layout.createEl("option", { value, text });
     layout.value = this.layout;
     const status = root.createDiv({ cls: "study-cards-search-status study-cards-muted", attr: { role: "status" } });
