@@ -1,0 +1,24 @@
+.study-cards-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.study-cards-item {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+  overflow-wrap: anywhere;
+}
+
+.study-cards-item > summary {
+  cursor: pointer;
+  padding-bottom: 0.25rem;
+}
+
+.study-cards-form {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  justify-items: start;
+}
