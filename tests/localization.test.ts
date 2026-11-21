@@ -55,3 +55,17 @@ test("both catalogs provide every message and agree on its placeholders", () => 
     }
   }
 });
+
+test("displayed dates follow the device time zone even if it changes after startup", (t) => {
+  const previous = process.env.TZ;
+  t.after(() => {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  });
+  process.env.TZ = "UTC";
+  const english = createLocalization("en");
+  const timestamp = "2026-11-21T13:04:05Z";
+  assert.equal(english.date(timestamp), "11/21/2026, 1:04:05 PM");
+  process.env.TZ = "Europe/Samara";
+  assert.equal(english.date(timestamp), "11/21/2026, 5:04:05 PM");
+});

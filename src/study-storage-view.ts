@@ -162,9 +162,8 @@ function confirm(root: HTMLElement, label: string, save: () => Promise<void>, ca
   button.onclick = () => {
     button.disabled = true;
     status.textContent = t("saving");
-    void save().catch((error) => { status.textContent = message(error); }).finally(() => {
+    void save().then(() => { status.textContent = ""; }).catch((error) => { status.textContent = message(error); }).finally(() => {
       button.disabled = false;
-      if (status.textContent === t("saving")) status.textContent = "";
     });
   };
 }

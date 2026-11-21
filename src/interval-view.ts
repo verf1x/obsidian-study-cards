@@ -82,8 +82,10 @@ export class IntervalView {
   renderCardReviews(root: HTMLElement, reviews: readonly IntervalReview[]) {
     const list = root.createEl("ul", { attr: { "aria-label": t("reviewGrades") } });
     for (const { grade, at } of [...reviews].reverse()) {
-      const row = list.createEl("li", { text: t(grade) + " · " });
-      row.createEl("time", { text: localization.date(at), attr: { datetime: at } });
+      list.createEl("li").createEl("time", {
+        text: t("reviewHistoryEntry", { grade: t(grade), date: localization.date(at) }),
+        attr: { datetime: at },
+      });
     }
   }
 

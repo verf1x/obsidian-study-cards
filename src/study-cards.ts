@@ -1,5 +1,5 @@
 import type { CardProgress, FreeGrade, FreeSession, IntervalReview, KnownNote, ReviewSchedule, Section, Source, SourceRequest, StudyData } from "./study-state";
-import { storedAction } from "./snapshot-actions";
+import { storedAction, type StudyAction } from "./snapshot-actions";
 import { StaleStudyState, StudyStorage, type ImportPreview, type StudyMutation } from "./study-storage";
 import { MarkdownNote, sameFormat, single, type Format, type MarkdownCard, type Status } from "./markdown";
 import { canAdvance, checkRange, checkScore, isCheckCard, sampleCards, type CheckSelection } from "./free-check";
@@ -220,9 +220,9 @@ export class StudyCards {
   chooseStudyVersion(token: number, id: string) { return this.storageAction(() => this.storage.choose(token, id)); }
   restoreStudyData(token: number, useBackup: boolean) { return this.storageAction(() => this.storage.restore(token, useBackup)); }
 
-  private run<T>(description: string, action: () => Promise<T>, options?: { background: boolean }): Promise<T>;
-  private run(description: string, action: () => Promise<void>, options: { mutation: ProgressMutation }): Promise<void>;
-  private run<T>(description: string, action: () => Promise<T>, options: { background?: boolean; mutation?: ProgressMutation } = {}) {
+  private run<T>(description: StudyAction, action: () => Promise<T>, options?: { background: boolean }): Promise<T>;
+  private run(description: StudyAction, action: () => Promise<void>, options: { mutation: ProgressMutation }): Promise<void>;
+  private run<T>(description: StudyAction, action: () => Promise<T>, options: { background?: boolean; mutation?: ProgressMutation } = {}) {
     const mutation = options.mutation;
     return this.enqueue(async () => {
       const token = this.storage.token;
@@ -243,7 +243,7 @@ export class StudyCards {
             this.saving = true;
             this.notify();
           }
-          await this.storage.commit({ id: mutation?.id ?? this.newId(), revision: base.revision, action: description }, () => this.data);
+          await this.storage.commit({ id: mutation?.id ?? this.newId(), revision: base.revision, action: storedAction(description) }, () => this.data);
           this.data = this.storage.state.data;
           published = true;
         }
@@ -268,7 +268,7 @@ export class StudyCards {
 
   async addSection(name: string) {
     const id = this.newId();
-    await this.run(storedAction("addSection"), async () => {
+    await this.run("addSection", async () => {
       const title = name.trim();
       if (!title) throw new Error(t("enterSectionName"));
       this.data.sections.push({ id, name: title, sources: [] });
@@ -286,7 +286,7 @@ export class StudyCards {
   }
 
   removeSource(sectionId: string, sourceId: string) {
-    return this.run(storedAction("disconnectSource"), async () => {
+    return this.run("disconnectSource", async () => {
       const section = this.section(sectionId);
       const removed = section.sources.find(({ id }) => id === sourceId);
       section.sources = section.sources.filter(({ id }) => id !== sourceId);
@@ -428,11 +428,11 @@ export class StudyCards {
   }
 
   scan() {
-    return this.run(storedAction("refreshCatalog"), () => this.scanIndex(true), { background: true });
+    return this.run("refreshCatalog", () => this.scanIndex(true), { background: true });
   }
 
   update(path: string) {
-    return this.run(storedAction("updateNote"), () => this.reconcile(path), { background: true });
+    return this.run("updateNote", () => this.reconcile(path), { background: true });
   }
 
   recheckIntervalSource(path: string) {
@@ -446,7 +446,7 @@ export class StudyCards {
   }
 
   private recheckIntervalSources(paths: string[]) {
-    return this.run(storedAction("checkReviewSources"), async () => {
+    return this.run("checkReviewSources", async () => {
       for (const path of paths) await this.reconcile(path, false, undefined, false);
     }, { background: true });
   }
@@ -456,14 +456,14 @@ export class StudyCards {
   }
 
   delete(path: string) {
-    return this.run(storedAction("deleteNote"), async () => {
+    return this.run("deleteNote", async () => {
       for (const key of this.index.keys()) if (hasPath(key, path)) this.removeFromIndex(key);
       if (this.data.sections.some(({ sources }) => sources.some((source) => hasPath(source.path, path)))) this.catalogChangeCount++;
     }, { background: true });
   }
 
   rename(oldPath: string, newPath: string) {
-    return this.run(storedAction("moveSource"), async () => {
+    return this.run("moveSource", async () => {
       if (this.storage.problem) {
         this.catalogChangeCount++;
         await this.scanIndex(false);
@@ -559,7 +559,7 @@ export class StudyCards {
   }
 
   setStatus(selected: Card, status: Status) {
-    return this.run(storedAction("changeMastery"), async () => {
+    return this.run("changeMastery", async () => {
       const { entry } = this.currentCard(selected);
       const saved = await this.write(entry.note, (note) => note.setStatus(entry.format, selected.index, status));
       await this.reconcile(selected.path, false, saved);
@@ -580,7 +580,7 @@ export class StudyCards {
   }
 
   saveProgress(selected: Card, progress: CardProgress) {
-    return this.run(storedAction("changeProgress"), async () => {
+    return this.run("changeProgress", async () => {
       const id = await this.verifyCard(selected);
       if (JSON.stringify(selected.progress) !== JSON.stringify(this.data.progress[id])) throw new StaleStudyState();
       this.data.progress[id] = { ...this.data.progress[id], ...progress };
@@ -589,7 +589,7 @@ export class StudyCards {
 
   recordReview(mutation: ProgressMutation, selected: Card,
     review: Omit<IntervalReview, "id" | "previousSchedule" | "order">, schedule: ReviewSchedule) {
-    return this.run(storedAction("gradeReview"), async () => {
+    return this.run("gradeReview", async () => {
       const id = await this.verifyCard(selected);
       const prior = this.data.progress[id];
       const current = { ...selected, progress: prior };
@@ -648,7 +648,7 @@ export class StudyCards {
   }
 
   undoReview(mutation: ProgressMutation, uuid: string, sessionId: string, reviewId: string) {
-    return this.run(storedAction("undoReview"), async () => {
+    return this.run("undoReview", async () => {
       const last = this.reviewToUndo(sessionId, this.data);
       if (last?.uuid !== uuid || last.review.id !== reviewId) throw new StaleStudyState();
       this.data.progress[uuid] = {
@@ -658,7 +658,7 @@ export class StudyCards {
   }
 
   setSuspended(mutation: ProgressMutation, selected: Card, suspended: boolean) {
-    return this.run(suspended ? storedAction("suspendReviews") : storedAction("resumeReviews"), async () => {
+    return this.run(suspended ? "suspendReviews" : "resumeReviews", async () => {
       const id = await this.verifyCard(selected);
       this.data.progress[id] = { ...this.data.progress[id], suspended };
     }, { mutation });
@@ -673,7 +673,7 @@ export class StudyCards {
   }
 
   startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
-    return this.run(storedAction("startFreeCheck"), async () => {
+    return this.run("startFreeCheck", async () => {
       if ((this.data.freeSession?.id ?? null) !== previousId) throw new StaleStudyState();
       const result = "retryOf" in selection ? this.data.freeResults.find(({ id }) => id === selection.retryOf) : undefined;
       if ("retryOf" in selection && !result) throw new StaleStudyState();
@@ -704,7 +704,7 @@ export class StudyCards {
   }
 
   moveFreeCheck(mutation: ProgressMutation, sessionId: string, direction: -1 | 1) {
-    return this.run(storedAction("moveFreeCheck"), async () => {
+    return this.run("moveFreeCheck", async () => {
       const session = this.freeSession(sessionId);
       const position = session.position + direction;
       if (position < 0 || position >= session.cardIds.length) throw new StaleStudyState();
@@ -719,7 +719,7 @@ export class StudyCards {
   }
 
   gradeFreeCheck(mutation: ProgressMutation, sessionId: string, selected: Card, grade: FreeGrade) {
-    return this.run(storedAction("gradeFreeCheck"), async () => {
+    return this.run("gradeFreeCheck", async () => {
       const session = this.freeSession(sessionId);
       if (selected.id !== session.cardIds[session.position]
         || !this.index.get(selected.path)?.sections.includes(session.sectionId)) throw new StaleStudyState();
@@ -729,7 +729,7 @@ export class StudyCards {
   }
 
   saveFreeCheck(mutation: ProgressMutation, session: FreeSession) {
-    return this.run(storedAction("saveFreeCheck"), async () => {
+    return this.run("saveFreeCheck", async () => {
       const previous = this.data.freeSession;
       if (previous && (previous.id !== session.id || previous.sectionId !== session.sectionId
         || previous.startedAt !== session.startedAt || previous.retryOf !== session.retryOf
@@ -747,7 +747,7 @@ export class StudyCards {
   }
 
   finishFreeCheck(mutation: ProgressMutation, sessionId: string, finishedAt: string) {
-    return this.run(storedAction("finishFreeCheck"), async () => {
+    return this.run("finishFreeCheck", async () => {
       const session = this.freeSession(sessionId);
       const { position: _position, furthestPosition: _furthest, ...result } = session;
       const available = new Set(this.sectionCards(session.sectionId).filter(isCheckCard).map(({ id }) => id));
@@ -758,14 +758,14 @@ export class StudyCards {
   }
 
   discardFreeCheck(mutation: ProgressMutation, sessionId: string) {
-    return this.run(storedAction("discardFreeCheck"), async () => {
+    return this.run("discardFreeCheck", async () => {
       this.freeSession(sessionId);
       this.data.freeSession = null;
     }, { mutation });
   }
 
   repairId(selected: Card) {
-    return this.run(storedAction("repairUuid"), async () => {
+    return this.run("repairUuid", async () => {
       const { entry, card } = this.currentCard(selected);
       if (card.id) throw new Error(t("cardAlreadyHasUuid"));
       const saved = await this.write(entry.note, (note) => note.setId(entry.format, card.index, this.newId()));
@@ -774,7 +774,7 @@ export class StudyCards {
   }
 
   resolveDuplicate(keep: Card, change: Card, action: "new-id" | "trash") {
-    return this.run(storedAction("resolveUuidConflict"), async () => {
+    return this.run("resolveUuidConflict", async () => {
       const winner = this.currentCard(keep);
       const { entry, card } = this.currentCard(change);
       if (!winner.card.id || winner.card.id !== card.id || (keep.path === change.path && keep.index === change.index)) {
@@ -800,7 +800,7 @@ export class StudyCards {
   }
 
   createCard(sectionId: string, filename: string, folder: string, format: Format, template: boolean) {
-    return this.run(storedAction("createCard"), async () => {
+    return this.run("createCard", async () => {
       const section = this.section(sectionId);
       const name = filename.trim().replace(/\.md$/i, "");
       if (!name || name === "." || name === ".." || /[\\/:*?"<>|\r\n]/.test(name)) {
@@ -821,7 +821,7 @@ export class StudyCards {
     this.section(sectionId, this.catalog.data);
     return new EnrollmentPreview(requests.map((request) => ({ ...request })),
       (sources, getChoice, previous, affected) => this.plan(sectionId, sources, getChoice, this.catalog.data, previous, affected),
-      (sources, rows, getChoice) => this.run(storedAction("connectSources"), () => this.enroll(sectionId, sources, rows, getChoice, replaceSourceId)));
+      (sources, rows, getChoice) => this.run("connectSources", () => this.enroll(sectionId, sources, rows, getChoice, replaceSourceId)));
   }
 
   private async plan(sectionId: string, requests: SourceRequest[], getChoice: PreviewChoice,

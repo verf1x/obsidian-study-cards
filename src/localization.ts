@@ -16,9 +16,6 @@ export function createLocalization(obsidianLanguage: string | undefined, timeZon
   const decimal = new Intl.NumberFormat(language, { maximumFractionDigits: 1 });
   const percent = new Intl.NumberFormat(language, { style: "percent", maximumFractionDigits: 1 });
   const plural = new Intl.PluralRules(language);
-  const date = new Intl.DateTimeFormat(language, {
-    year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric", timeZone,
-  });
   function text(key: MessageKey, values: Values = {}) {
     const message = messages[key][index];
     const template = typeof message === "string" ? message
@@ -29,10 +26,9 @@ export function createLocalization(obsidianLanguage: string | undefined, timeZon
     });
   }
   return {
-    language,
     text,
     snapshotAction(action: string) { return language === "en" ? englishSnapshotAction(action) : action; },
-    date(value: Date | string) { return date.format(new Date(value)); },
+    date(value: Date | string) { return new Date(value).toLocaleString(language, { timeZone }); },
     percent(value: number) { return percent.format(value); },
     interval(ms: number) {
       const minutes = Math.max(1, Math.round(ms / 60_000));

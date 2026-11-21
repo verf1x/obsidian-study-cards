@@ -33,7 +33,9 @@ const actions = {
 
 const englishCaptions = new Map<string, string>(Object.values(actions));
 
-export function storedAction(action: keyof typeof actions) {
+export type StudyAction = keyof typeof actions;
+
+export function storedAction(action: StudyAction) {
   return actions[action][0];
 }
 
