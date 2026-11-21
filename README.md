@@ -1,10 +1,22 @@
 # Obsidian Study Cards
 
-Study cards for Obsidian.
+Study Cards turns Markdown notes into study cards and organizes them into study sections.
 
-## Local installation
+## Installation
 
-Use Obsidian 1.8.7 or later. Run `npm ci` and `npm run build`. Copy `main.js`, `manifest.json` and `styles.css` into `.obsidian/plugins/study-cards/` inside a test vault. Enable **Study Cards** in Community plugins, then open it from the ribbon or the command palette.
+For manual installation, download `main.js`, `manifest.json` and `styles.css` from the same [GitHub release](https://github.com/verf1x/obsidian-study-cards/releases). To build locally, use the Node.js version in [`.node-version`](.node-version), run `npm ci` and `npm run build`, and take the same three files from the repository root.
+
+Copy all three files into `.obsidian/plugins/study-cards/` in your vault. Enable **Study Cards** in Community plugins, then open it from the ribbon or the command palette.
+
+Create a study section and add Markdown files or folders. The preview shows which notes will be connected and which headings become cards. For an existing note to join an active folder source automatically, set `qcards_source: true` in its properties.
+
+## Platform compatibility
+
+Release acceptance on Windows, Linux and Android is pending. The manifest currently declares Obsidian 1.8.7 as the provisional minimum. Study Cards can also be installed on macOS and iOS. Compatibility on those platforms is unverified.
+
+## Test vault
+
+After building locally, run `npm run test-vault -- "../Study Cards test"` to create a vault in a new folder with the working plugin and a collection of 100 questions. Open the folder as a vault and enable Study Cards. See the [release guide](docs/release.md) for testing with files downloaded from a draft and recording acceptance results.
 
 ## Catalog and free-check prototype (#9)
 
@@ -13,10 +25,6 @@ Run `npm ci` and `npm run prototype -- "path to a new vault"`. Open that folder 
 Switch between the list, table and answer preview in the catalog. Start a free check, reveal the answer with Space, grade with 1 or 2, and move with the arrow keys. Confirm the result to try retrying mistakes. Checks and history are held in memory for the lifetime of the plugin. The same setup command updates the prototype build and preserves the vault's notes and plugin data.
 
 In an existing demo vault, connect `Материалы/Энтропия источника.md` to try the LaTeX example.
-
-Create a study section, then add Markdown files or folders. The preview shows which notes will be connected and which headings become cards. For an existing note to join an active folder source automatically, set `qcards_source: true` in its properties.
-
-Run `npm run typecheck` and `npm test` for local verification.
 
 ## Progress and backups
 
@@ -27,3 +35,9 @@ Expand **Данные Study Cards** in the tab to export a backup or preview and
 ## Contributing
 
 Start each change in a dedicated Git worktree and branch. Follow the [contribution workflow](AGENTS.md#contribution-workflow) to open a pull request, review the changes, and verify them before merging into `main`.
+
+CI runs `npm ci`, `npm run typecheck`, `npm test` and `npm run build`. See the [release guide](docs/release.md) for tagging, acceptance and publishing.
+
+## License
+
+[MIT](LICENSE). The working `main.js` includes the license notices for the dependencies bundled into it.

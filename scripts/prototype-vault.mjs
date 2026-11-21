@@ -33,22 +33,10 @@ const notes = "Материалы";
 const catalog = notes + "/HTTP — 100 вопросов.md";
 const entropy = notes + "/Энтропия источника.md";
 await mkdir(join(vault, notes), { recursive: true });
-await writeOnce(join(vault, catalog), await readFile(join(repo, "scripts", "prototype-http.md")));
-await writeOnce(join(vault, entropy), await readFile(join(repo, "scripts", "prototype-entropy.md")));
-await writeOnce(join(vault, notes, "Кэш браузера.md"), [
-  "# Зачем браузеру кэш?",
-  "",
-  "Кэш сокращает число повторных сетевых запросов. Если сохранённый ответ устарел, браузер может проверить его через ETag.",
-  "",
-].join("\n"));
-await writeOnce(join(vault, notes, "Шпаргалка HTTP.md"), [
-  "# Шпаргалка HTTP",
-  "",
-  "- `200` — сервер вернул представление.",
-  "- `304` — сохранённое представление ещё актуально.",
-  "- `404` — ресурс не найден.",
-  "",
-].join("\n"));
+const materials = join(repo, "fixtures", "test-vault", notes);
+for (const file of await readdir(materials)) {
+  await writeOnce(join(vault, notes, file), await readFile(join(materials, file)));
+}
 await writeOnce(join(vault, "Старт.md"), [
   "# Макет Study Cards",
   "",
