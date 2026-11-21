@@ -378,7 +378,18 @@ export class StudyCards {
       this.removeFromIndex(path);
       return;
     }
-    let note = saved ?? await this.read(path);
+    let note: MarkdownNote | undefined;
+    try {
+      note = saved ?? await this.read(path);
+    } catch {
+      const indexed = this.index.get(path);
+      const error = "Заметка недоступна для чтения";
+      if (indexed && indexed.error !== error) {
+        this.index.set(path, { ...indexed, error });
+        this.catalogChangeCount++;
+      }
+      return;
+    }
     const memberships = note ? this.memberships(path, note) : [];
     if (!note || !memberships.length) {
       this.removeFromIndex(path);
@@ -422,6 +433,11 @@ export class StudyCards {
     return this.run("Обновление заметки", () => this.reconcile(path), { background: true });
   }
 
+  recheckIntervalSource(path: string) {
+    return this.run("Проверка источника интервального повторения", () => this.reconcile(path, false, undefined, false),
+      { background: true });
+  }
+
   refreshSources() {
     return this.enqueue(async () => { this.notify(); });
   }
@@ -460,9 +476,14 @@ export class StudyCards {
   }
 
   private allCards(data = this.data, index = this.index) {
-    const cards = [...index.values()].flatMap((entry) => entry.cards);
     const counts = new Map<string, number>();
-    for (const card of cards) if (card.id) counts.set(card.id, (counts.get(card.id) ?? 0) + 1);
+    const cards: Card[] = [];
+    for (const entry of index.values()) {
+      for (const card of entry.cards) {
+        if (card.id) counts.set(card.id, (counts.get(card.id) ?? 0) + 1);
+        if (!entry.error) cards.push(card);
+      }
+    }
     return cards.map((card): Card => card.id ? {
       ...card,
       identity: counts.get(card.id)! > 1 ? "duplicate" : "valid",

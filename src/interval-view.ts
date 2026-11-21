@@ -23,13 +23,17 @@ function formatInterval(ms: number) {
 function sameQuestion(previous: ReviewQuestion | undefined, current: ReviewQuestion) {
   const card = previous?.card;
   return card && previous.revision === current.revision
-    && card.id === current.card.id && card.path === current.card.path && card.status === current.card.status
+    && card.id === current.card.id && card.path === current.card.path && card.index === current.card.index
+    && card.status === current.card.status
     && card.question === current.card.question && card.answer === current.card.answer;
 }
+
+type QuestionCheck = { question: ReviewQuestion; state: "checking" | "ready" | "failed" };
 
 export class IntervalView {
   private session?: IntervalSession;
   private revealed?: ReviewQuestion;
+  private checked?: QuestionCheck;
   private busy = false;
   private opening?: Promise<IntervalSession>;
   private timer?: ReturnType<typeof setTimeout>;
@@ -43,7 +47,7 @@ export class IntervalView {
 
   close() {
     this.clearTimer();
-    this.session = this.revealed = undefined;
+    this.session = this.revealed = this.checked = undefined;
     this.opening = undefined;
   }
 
@@ -93,8 +97,11 @@ export class IntervalView {
       this.close();
       return false;
     }
-    const { question, undo, available, nextDue } = session.refreshQuestion();
-    if (!question || !sameQuestion(this.revealed, question)) this.revealed = undefined;
+    const { question: candidate, undo, available, nextDue } = session.refreshQuestion();
+    const check = candidate && this.checkQuestion(candidate);
+    if (!candidate) this.checked = undefined;
+    const question = check?.state === "ready" ? candidate : undefined;
+    if (!candidate || !sameQuestion(this.revealed, candidate)) this.revealed = undefined;
     const stats = this.study.intervalStatistics(section.id, new Date());
     this.updateAt(stats.dayEndsAt, nextDue);
 
@@ -111,14 +118,21 @@ export class IntervalView {
     this.renderStatistics(panel, { ...stats, available });
 
     const body = panel.createDiv({ cls: "study-cards-interval-body" });
+    const heading = nextDue ? "Ожидание повторения" : "Нет карточек для повторения";
     body.createEl("h2", {
-      text: question?.card.question ?? (nextDue ? "Ожидание повторения" : "Нет карточек для повторения"),
+      text: question?.card.question ?? (check ? "Проверка карточки" : heading),
       cls: "study-cards-interval-question", attr: { tabindex: "-1" },
     });
-    if (!question && nextDue) body.createEl("p").createEl("time", {
+    if (!candidate && nextDue) body.createEl("p").createEl("time", {
       text: "Следующий повтор · " + nextDue.toLocaleString(), attr: { datetime: nextDue.toISOString() },
     });
     const footer = panel.createDiv({ cls: "study-cards-interval-footer" });
+    if (check?.state === "failed") {
+      footer.createEl("button", { text: "Проверить ещё раз" }).onclick = () => {
+        this.checked = undefined;
+        this.render();
+      };
+    }
     if (question) {
       if (this.revealed) {
         body.createEl("h3", { text: "Ответ", cls: "study-cards-interval-answer", attr: { tabindex: "-1" } });
@@ -139,6 +153,25 @@ export class IntervalView {
       button.onclick = () => this.perform(() => session.undo(undo), ".study-cards-interval-question");
     }
     return true;
+  }
+
+  private checkQuestion(question: ReviewQuestion) {
+    if (this.checked && sameQuestion(this.checked.question, question)) return this.checked;
+    const check: QuestionCheck = { question, state: "checking" };
+    this.checked = check;
+    void this.study.recheckIntervalSource(question.card.path).then(() => {
+      check.state = "ready";
+    }).catch((error) => {
+      check.state = "failed";
+      if (this.checked === check) new Notice(message(error));
+    }).finally(() => {
+      if (this.checked !== check) return;
+      const selector = ".study-cards-interval-question";
+      const hadFocus = this.root.querySelector(selector) === this.root.ownerDocument.activeElement;
+      this.render();
+      if (hadFocus) this.focus(selector);
+    });
+    return check;
   }
 
   private renderStatistics(root: HTMLElement, { available, cards, reviews }: ReturnType<StudyCards["intervalStatistics"]>) {
@@ -187,6 +220,7 @@ export class IntervalView {
       if (focus) this.focus(focus);
     }).catch((error) => {
       this.busy = false;
+      this.checked = undefined;
       this.render();
       new Notice(message(error));
     });

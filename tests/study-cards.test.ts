@@ -31,10 +31,14 @@ async function testVault() {
   };
   let beforeWrite: (() => Promise<void>) | undefined;
   const dirty = new Set<string>();
+  const unreadable = new Set<string>();
   const files: StudyVault = {
     markdownFiles: () => [...paths],
     folderExists: (path) => existsSync(join(root, path)),
-    read: (path) => readFile(join(root, path), "utf8"),
+    async read(path) {
+      if (unreadable.has(path)) throw new Error("EIO");
+      return readFile(join(root, path), "utf8");
+    },
     async process(path, edit) {
       const hook = beforeWrite;
       beforeWrite = undefined;
@@ -61,6 +65,7 @@ async function testVault() {
     beforePersist: (hook?: typeof persistHook) => { persistHook = hook; },
     hook: (fn: () => Promise<void>) => { beforeWrite = fn; },
     dirty,
+    unreadable,
     edit: (path: string, source: string) => writeFile(join(root, path), source),
     async delete(path: string) {
       await rm(join(root, path));
@@ -239,6 +244,32 @@ test("сессия фиксирует допуск и ставит коротк�
   assert.equal(empty.nextDue, undefined);
   await assert.rejects(session.grade(current, "easy"), /изменились/);
   await study.delete(path);
+});
+
+test("проверка перед показом пропускает нечитаемый Markdown и подхватывает изменения статуса", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = await vault.open();
+  const section = await study.addSection("Источники повторов");
+  const format = { mode: "single", question: "filename" } as const;
+  const first = await study.createCard(section, "Первый", "", format, false);
+  const second = await study.createCard(section, "Второй", "", format, false);
+  for (const card of study.cards(section)) await study.setStatus(card, "studied");
+  const session = await IntervalSession.start(study, section);
+
+  assert.equal(session.refreshQuestion().question?.card.path, first);
+  vault.unreadable.add(first);
+  await study.recheckIntervalSource(first);
+  assert.equal(session.refreshQuestion().question?.card.path, second);
+  assert.equal(study.intervalStatistics(section, new Date()).available, 1);
+
+  const saved = await vault.files.read(second);
+  await vault.edit(second, saved.replace("qcards/status/studied", "qcards/status/new"));
+  await study.recheckIntervalSource(second);
+  assert.equal(session.refreshQuestion().question, undefined);
+  vault.unreadable.delete(first);
+  await study.update(first);
+  assert.equal(session.refreshQuestion().question?.card.path, first);
 });
 
 test("подключает файл, сохраняет оформление и восстанавливает открытый раздел", async (t) => {
