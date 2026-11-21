@@ -4,7 +4,9 @@ Study Cards turns Markdown notes into study cards and organizes them into study 
 
 ## Installation
 
-For manual installation, copy `main.js`, `manifest.json` and `styles.css` from the same [GitHub release](https://github.com/verf1x/obsidian-study-cards/releases) into `.obsidian/plugins/study-cards/` in your vault. To build the files locally, use the Node.js version in [`.node-version`](.node-version) and run `npm ci` and `npm run build`. Enable **Study Cards** in Community plugins, then open it from the ribbon or the command palette.
+For manual installation, download `main.js`, `manifest.json` and `styles.css` from the same [GitHub release](https://github.com/verf1x/obsidian-study-cards/releases). To build locally, use the Node.js version in [`.node-version`](.node-version), run `npm ci` and `npm run build`, and take the same three files from the repository root.
+
+Copy all three files into `.obsidian/plugins/study-cards/` in your vault. Enable **Study Cards** in Community plugins, then open it from the ribbon or the command palette.
 
 Create a study section and add Markdown files or folders. The preview shows which notes will be connected and which headings become cards. For an existing note to join an active folder source automatically, set `qcards_source: true` in its properties.
 
