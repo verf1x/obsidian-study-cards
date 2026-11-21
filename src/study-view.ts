@@ -4,6 +4,7 @@ import { reviewDue } from "./interval-queue";
 import { IntervalView } from "./interval-view";
 import { masteryLabels, t } from "./localization";
 import type { Status } from "./markdown";
+import { configureNoteQuestions } from "./note-questions-modal";
 import { CreateCardModal, message, SelectSourcesModal, type WatchVault } from "./source-modals";
 import { renderStudyStorage } from "./study-storage-view";
 import type { Card, StudyCards } from "./study-cards";
@@ -96,8 +97,13 @@ export class StudyView extends ItemView {
         row.createSpan({ text: t("sourceUnavailable") });
         row.createEl("button", { text: t("reconnect") }).onclick = () =>
           new SelectSourcesModal(this.app, this.study, this.watch, section.id, [], false, source).open();
-      } else if (source.kind === "folder") {
-        row.createEl("button", { text: t("configure") }).onclick = () =>
+      } else {
+        const folder = source.kind === "folder";
+        row.createEl("button", {
+          text: t(folder ? "configureQuestions" : "configure"),
+          attr: { "aria-label": t("configureQuestionsFrom", { path }) },
+        }).onclick = () => configureNoteQuestions(this.app, this.study, section.id, source);
+        if (folder) row.createEl("button", { text: t("configureSource") }).onclick = () =>
           new SelectSourcesModal(this.app, this.study, this.watch, section.id, [source], true).open();
       }
       row.createEl("button", { text: t("disconnect") }).onclick = () => this.perform(this.study.removeSource(section.id, source.id));

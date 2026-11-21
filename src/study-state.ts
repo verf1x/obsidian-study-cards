@@ -14,7 +14,12 @@ export interface Source {
   excluded: string[];
 }
 
-export interface Section { id: string; name: string; sources: Source[] }
+export interface Section {
+  id: string;
+  name: string;
+  sources: Source[];
+  noteSelections?: Record<string, string[]>;
+}
 interface KnownCard { question: string; answerHash: number; id: string }
 export interface KnownNote { format: Format; cards: KnownCard[] }
 
@@ -93,6 +98,8 @@ function sections(value: unknown): value is Section[] {
     && Array.isArray(section.sources) && section.sources.every((source) => record(source) && id(source.id)
       && (source.kind === "file" ? id(source.path) : source.kind === "folder" && text(source.path))
       && typeof source.recursive === "boolean" && format(source.format) && stringList(source.excluded))
+    && (section.noteSelections === undefined || (record(section.noteSelections)
+      && Object.entries(section.noteSelections).every(([path, ids]) => id(path) && stringList(ids) && ids.every(isCardId))))
     && distinct(section.sources.map(({ id }) => id))) && distinct(value.map(({ id }) => id));
 }
 
