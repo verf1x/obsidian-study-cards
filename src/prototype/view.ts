@@ -135,7 +135,7 @@ export class PrototypeView extends StudyView {
       results.empty();
       if (!visible.length) return;
       if (this.layout === "table") this.renderTable(results, visible, expanded, positions);
-      else if (this.layout === "split") this.renderSplit(results, visible);
+      else if (this.layout === "split") this.renderSplit(results, visible, expanded);
       else {
         const list = results.createDiv({ cls: "study-cards-catalog-list" });
         visible.forEach((card) => this.renderCard(list, card, this.cardKey(card), expanded.has(this.cardKey(card))));
@@ -173,15 +173,26 @@ export class PrototypeView extends StudyView {
     });
   }
 
-  private renderSplit(root: HTMLElement, cards: Card[]) {
+  private renderSplit(root: HTMLElement, cards: Card[], opened: Set<string | null>) {
     const selected = cards.find((card) => this.cardKey(card) === this.selected) ?? cards[0]!;
     const split = root.createDiv({ cls: "study-cards-catalog-split" });
     const list = split.createDiv({ cls: "study-cards-split-list" });
     const detail = split.createDiv({ cls: "study-cards-catalog-detail" });
-    const show = (card: Card) => {
+    const show = (card: Card, restoreOpen = false) => {
       detail.empty();
       detail.createEl("h3", { text: card.question });
-      this.renderCardBody(detail, card);
+      if (isCheckCard(card)) this.renderCardActions(detail.createDiv({ cls: "study-cards-controls" }), card);
+      const key = "split:" + this.cardKey(card);
+      const answer = detail.createEl("details", { attr: { "data-card": key } });
+      const summary = answer.createEl("summary");
+      const body = answer.createDiv();
+      const update = () => {
+        summary.textContent = answer.open ? "Скрыть ответ" : "Показать ответ";
+        if (answer.open && !body.hasChildNodes()) this.renderCardBody(body, card, false);
+      };
+      answer.open = restoreOpen && opened.has(key);
+      answer.ontoggle = update;
+      update();
     };
     cards.forEach((card) => {
       const button = list.createEl("button", {
@@ -197,7 +208,7 @@ export class PrototypeView extends StudyView {
         detail.scrollTop = 0;
       };
     });
-    show(selected);
+    show(selected, true);
   }
 
   protected renderCardSummary(root: HTMLElement, card: Card) {
@@ -317,17 +328,15 @@ export class PrototypeView extends StudyView {
       const text = source?.status === "invalid" ? "Некорректный статус освоения. Исправьте его в каталоге или перейдите дальше."
         : "Карточка недоступна. Можно перейти дальше.";
       body.createEl("p", { text, cls: "study-cards-empty" });
-    } else {
+    } else if (revealed) {
       body.createEl("button", { text: card.path, cls: "study-cards-note-link" }).onclick = () => this.perform(this.openNote(card.path));
-      if (revealed) {
-        const answer = body.createDiv({ cls: "study-cards-answer" });
-        answer.createEl("h2", { text: "Ответ", attr: { tabindex: "-1", "data-focus": "answer" } });
-        if (this.updated) answer.createEl("p", { text: "Ответ обновлён в заметке", cls: "study-cards-muted" });
-        const scrollTop = this.scrollTop;
-        void this.renderMarkdown(answer.createDiv(), card).then(() => {
-          if (scrollTop && body.isConnected) body.scrollTop = scrollTop;
-        });
-      }
+      const answer = body.createDiv({ cls: "study-cards-answer" });
+      answer.createEl("h2", { text: "Ответ", attr: { tabindex: "-1", "data-focus": "answer" } });
+      if (this.updated) answer.createEl("p", { text: "Ответ обновлён в заметке", cls: "study-cards-muted" });
+      const scrollTop = this.scrollTop;
+      void this.renderMarkdown(answer.createDiv(), card).then(() => {
+        if (scrollTop && body.isConnected) body.scrollTop = scrollTop;
+      });
     }
 
     const footer = panel.createDiv({ cls: "study-cards-check-footer" });

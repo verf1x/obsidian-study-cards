@@ -123,7 +123,7 @@ export class StudyView extends ItemView {
 
   protected renderCardSummary(_summary: HTMLElement, _card: Card) {}
 
-  protected renderCardBody(root: HTMLElement, card: Card) {
+  protected renderCardBody(root: HTMLElement, card: Card, includeExtraActions = true) {
     const actions = root.createDiv({ cls: "study-cards-controls study-cards-card-actions" });
     actions.createEl("button", { text: card.path, attr: { "aria-label": "Открыть заметку " + card.path } }).onclick =
       () => this.perform(this.openNote(card.path));
@@ -146,7 +146,7 @@ export class StudyView extends ItemView {
       actions.createSpan({ text: card.identity === "missing" ? "UUID отсутствует" : "Некорректный UUID" });
       actions.createEl("button", { text: "Создать новый ID" }).onclick = () => this.perform(this.study.repairId(card));
     }
-    this.renderCardActions(actions, card);
+    if (includeExtraActions) this.renderCardActions(actions, card);
 
     void this.renderMarkdown(root.createDiv(), card);
     if (card.progress) {
