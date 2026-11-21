@@ -739,7 +739,19 @@ export class StudyCards {
     return session.cardIds.map((id) => ({ id, card: cards.get(id) ?? null, grade: session.grades[id] ?? null }));
   }
 
-  startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
+  async startFreeCheck(mutation: ProgressMutation, previousId: string | null, selection: CheckSelection, startedAt: string) {
+    const selected = "cardIds" in selection ? new Set(selection.cardIds) : null;
+    if (selected) {
+      if (!selected.size) throw new Error(t("selectAtLeastOneCheckCard"));
+      await this.run("refreshCatalog", async () => {
+        await this.scanIndex(false);
+        const paths = new Set(this.allCards().filter(isCheckCard)
+          .filter(({ id }) => selected.has(id)).map(({ path }) => path));
+        await Promise.all([...paths].map((path) => this.reconcile(path, false, undefined, false)));
+        const files = new Set(this.vault.markdownFiles());
+        for (const path of paths) if (!files.has(path)) this.removeFromIndex(path);
+      }, { background: true });
+    }
     return this.run("startFreeCheck", async () => {
       if ((this.data.freeSession?.id ?? null) !== previousId) throw new StaleStudyState();
       const result = "retryOf" in selection ? this.data.freeResults.find(({ id }) => id === selection.retryOf) : undefined;
@@ -753,6 +765,10 @@ export class StudyCards {
           throw new Error(t("questionCountChanged"));
         }
         cardIds = sampleCards(cards, selection.order, selection.count, offset).map(({ id }) => id);
+      } else if (selected) {
+        const files = new Set(this.vault.markdownFiles());
+        cardIds = cards.filter(({ id, path }) => selected.has(id) && files.has(path)).map(({ id }) => id);
+        if (cardIds.length !== selected.size) throw new Error(t("selectedCardsChanged"));
       } else {
         const available = new Set(cards.map(({ id }) => id));
         cardIds = checkScore(result!, available).mistakes;

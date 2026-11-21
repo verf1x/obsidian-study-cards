@@ -49,7 +49,7 @@ export class FreeCheckView {
     if (!isCheckCard(card)) return;
     const start = root.createEl("button", { text: t("startFromCard") });
     start.disabled = this.blocked();
-    start.onclick = () => this.setup(sectionId, name, card.id);
+    start.onclick = () => this.setup(sectionId, name, card);
   }
 
   renderScreen(root: HTMLElement) {
@@ -106,7 +106,7 @@ export class FreeCheckView {
     return this.study.sections.find(({ id }) => id === sectionId)?.name ?? t("sectionUnavailable");
   }
 
-  private setup(sectionId: string, name: string, start?: string) {
+  private setup(sectionId: string, name: string, start?: CheckCard) {
     this.replaceCheck((previousId) => {
       new CheckSetupModal(this.app, { id: sectionId, name }, start,
         () => this.study.sections.some(({ id }) => id === sectionId) ? this.study.cards(sectionId, "source").filter(isCheckCard) : [],

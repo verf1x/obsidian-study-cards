@@ -1060,3 +1060,77 @@ test("свободная проверка выбирает вопросы по �
   await study.moveFreeCheck(mutation(), first.id, 1);
   assert.equal(study.freeChecks.session?.position, 2);
 });
+
+test("ручной выбор сохраняет точный состав в порядке источников, позицию и оценки", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const path = "Материалы/B/Коллекция.md";
+  const single = "Материалы/A/Карточка.md";
+  const marked = "---\nqcards_source: true\n---\n";
+  await vault.files.create(path, marked + "## Первый\nОтвет\n\n## Пропущенный\nОтвет\n\n## Последний\nОтвет\n");
+  await vault.files.create(single, marked + "# Отдельный\nОтвет\n");
+  let study = await vault.open();
+  const sectionId = await study.addSection("Раздел");
+  const preview = study.preview(sectionId, [
+    { kind: "file", path, format: { mode: "collection", level: 2 } },
+    { kind: "folder", path: "Материалы", recursive: true },
+  ]);
+  await preview.refresh();
+  preview.choose(1, path, { format: { mode: "collection", level: 2 } });
+  await preview.refresh();
+  assert.deepEqual(await preview.confirm(), { confirmed: true });
+  const mutation = () => ({ id: randomUUID(), revision: study.freeChecks.revision });
+  const idFor = (title: string) => study.cards(sectionId).find(({ question }) => question === title)!.id!;
+  const cardIds = ["Отдельный", "Последний", "Первый"].map(idFor);
+  const session = mutation();
+  await study.startFreeCheck(session, null, { sectionId, cardIds }, "2026-11-21T10:00:00Z");
+  const expected = ["Первый", "Последний", "Отдельный"];
+  assert.deepEqual(study.freeCheckQuestions().map(({ card }) => card?.question), expected);
+  await study.gradeFreeCheck(mutation(), session.id, study.freeCheckQuestions()[0]!.card!, "incorrect");
+  await study.moveFreeCheck(mutation(), session.id, 1);
+
+  study = await vault.open();
+  await study.scan();
+  assert.deepEqual(study.freeCheckQuestions().map(({ card }) => card?.question), expected);
+  assert.equal(study.freeChecks.session?.position, 1);
+  assert.equal(study.freeCheckQuestions()[0]?.grade, "incorrect");
+});
+
+test("ручной выбор при запуске замечает удаление карточки до обновления каталога", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const study = await vault.open();
+  const sectionId = await study.addSection("Раздел");
+  await study.createCard(sectionId, "Первый вопрос", "", { mode: "single", question: "filename" }, false);
+  await study.createCard(sectionId, "Второй вопрос", "", { mode: "single", question: "filename" }, false);
+  const [first, second] = study.cards(sectionId, "source");
+  const mutation = () => ({ id: randomUUID(), revision: study.freeChecks.revision });
+  const startedAt = "2026-11-21T10:00:00Z";
+  const previous = mutation();
+  await study.startFreeCheck(previous, null, { sectionId, order: "standard", count: 1 }, startedAt);
+  const saved = await vault.files.read(second!.path);
+  await vault.delete(second!.path);
+
+  await assert.rejects(study.startFreeCheck(mutation(), previous.id, { sectionId, cardIds: [first!.id!, second!.id!] }, startedAt),
+    /недоступных карточек/);
+  assert.equal(study.freeChecks.session?.id, previous.id);
+  assert.deepEqual(study.cards(sectionId).map(({ id }) => id), [first!.id]);
+
+  await vault.files.create(second!.path, saved);
+  const resumed = mutation();
+  await study.startFreeCheck(resumed, previous.id, { sectionId, cardIds: [first!.id!, second!.id!] }, startedAt);
+  assert.deepEqual(study.freeCheckQuestions().map(({ id }) => id), [first!.id, second!.id]);
+
+  const read = vault.files.read;
+  vault.files.read = async (path) => {
+    if (path === second!.path) {
+      vault.files.read = read;
+      await vault.delete(first!.path);
+    }
+    return read(path);
+  };
+  await assert.rejects(study.startFreeCheck(mutation(), resumed.id, { sectionId, cardIds: [first!.id!, second!.id!] }, startedAt),
+    /недоступных карточек/);
+  assert.equal(study.freeChecks.session?.id, resumed.id);
+  assert.deepEqual(study.cards(sectionId).map(({ id }) => id), [second!.id]);
+});

@@ -147,6 +147,92 @@
   justify-items: start;
 }
 
+.study-cards-picker {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.study-cards-picker:not([hidden]) {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.study-cards-picker input[type="search"] {
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.study-cards-picker-tools {
+  justify-content: space-between;
+}
+
+.study-cards-picker-list {
+  max-block-size: min(40vh, 25rem);
+  overflow: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  overflow-wrap: anywhere;
+}
+
+.study-cards-picker-note + .study-cards-picker-note {
+  border-block-start: 1px solid var(--background-modifier-border);
+  margin-block-start: 0.25rem;
+  padding-block-start: 0.25rem;
+}
+
+.study-cards-picker-filter,
+.study-cards-picker-option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.25rem;
+}
+
+.study-cards-picker-option:not(.study-cards-picker-note-option) {
+  padding-inline-start: 1rem;
+}
+
+.study-cards-picker-option input,
+.study-cards-picker-filter input {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.study-cards-picker-note-option {
+  font-weight: var(--font-semibold);
+}
+
+.study-cards-picker-note-option input:indeterminate {
+  position: relative;
+  background-color: var(--checkbox-color);
+  border-color: var(--checkbox-color);
+}
+
+.study-cards-picker-note-option input:indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  inline-size: 60%;
+  block-size: 2px;
+  margin: auto;
+  background-color: var(--checkbox-marker-color);
+}
+
+.study-cards-picker-detail {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-normal);
+}
+
+.is-mobile :is(.study-cards-picker-option, .study-cards-picker-filter, .study-cards-picker-tools button) {
+  min-block-size: 44px;
+}
+
 .study-cards-card-actions {
   margin-block-end: 1rem;
 }
