@@ -67,7 +67,7 @@ export type Confirmation = { confirmed: true } | { confirmed: false; paths: read
 
 const emptyData: StudyData = { sections: [], activeSection: null, knownNotes: {}, progress: {} };
 const hasPath = (path: string, parent: string) => parent === "" || path === parent || path.startsWith(parent + "/");
-const remapPath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
+export const remapPath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
   ? newPath + path.slice(oldPath.length) : path;
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 
@@ -385,8 +385,18 @@ export class StudyCards {
     } : card);
   }
 
-  cards(sectionId: string) {
-    return this.allCards().filter((card) => this.index.get(card.path)?.sections.includes(sectionId));
+  cards(sectionId: string, order?: "source") {
+    const cards = this.allCards().filter((card) => this.index.get(card.path)?.sections.includes(sectionId));
+    if (order !== "source") return cards;
+    const sources = this.section(sectionId).sources;
+    const positions = new Map<string, number>();
+    for (const { path } of cards) {
+      if (positions.has(path)) continue;
+      const membership = this.memberships(path, this.index.get(path)!.note).find(({ section }) => section === sectionId);
+      positions.set(path, membership ? sources.indexOf(membership.source) : sources.length);
+    }
+    return cards.sort((left, right) => positions.get(left.path)! - positions.get(right.path)!
+      || left.path.localeCompare(right.path) || left.index - right.index);
   }
 
   errors(sectionId: string) {
@@ -619,6 +629,23 @@ export class EnrollmentPreview {
   private choice = (source: number, path: string) => this.choices.get(source)?.get(path) ?? {};
 
   get sources(): readonly SourceRequest[] { return this.requests; }
+
+  replaceSources(sources: readonly SourceRequest[]) {
+    const previous = new Map(this.choices);
+    this.choices.clear();
+    for (const [index, source] of sources.entries()) {
+      const oldIndex = this.requests.findIndex(({ kind, path }) => kind === source.kind && path === source.path);
+      const old = this.requests[oldIndex];
+      const choices = previous.get(oldIndex);
+      if (!old || !choices) continue;
+      const changedFormat = !sameFormat(old.format ?? single, source.format ?? single);
+      this.choices.set(index, changedFormat
+        ? new Map([...choices].map(([path, { checked }]) => [path, { checked }]))
+        : choices);
+    }
+    this.requests.splice(0, this.requests.length, ...sources.map((source) => ({ ...source })));
+    this.rows = [];
+  }
 
   choose(source: number, path: string, choice: Choice) {
     let notes = this.choices.get(source);
