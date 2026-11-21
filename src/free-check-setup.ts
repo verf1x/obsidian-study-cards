@@ -39,7 +39,7 @@ export class FreeCheckSetup {
     this.heading = header.createEl("h2", { text: t("configureFreeCheck"), attr: { tabindex: "-1" } });
     header.createEl("p", { text: section.name });
     this.methodFields = this.root.createEl("fieldset", { cls: "study-cards-setup-methods" });
-    this.methodFields.createEl("legend", { text: t("checkSelectionMethod") });
+    this.methodFields.setAttribute("aria-label", t("checkSelectionMethod"));
     const choices = this.methodFields.createDiv({ cls: "study-cards-segmented" });
     for (const [method, name] of Object.entries(methods) as [Method, typeof methods[Method]][]) {
       const label = choices.createEl("label");
@@ -68,16 +68,16 @@ export class FreeCheckSetup {
     this.feedback = footer.createDiv({ attr: { role: "status" } });
     this.storageStatus = footer.createDiv({ attr: { role: "status" } });
     const actions = footer.createDiv({ cls: "study-cards-setup-actions" });
-    const secondary = actions.createDiv({ cls: "study-cards-controls" });
-    const summary = actions.createDiv({ cls: "study-cards-controls" });
-    this.cancel = secondary.createEl("button", { text: t("cancel"), attr: { type: "button" } });
-    this.cancel.onclick = close;
-    this.picker = new CardPicker(this.root, { summary, secondary }, start, () => {
+    const summary = actions.createDiv();
+    const buttons = actions.createDiv({ cls: "study-cards-controls study-cards-setup-buttons" });
+    this.picker = new CardPicker(this.root, { summary, buttons }, start, () => {
       this.feedback.textContent = "";
       this.update();
     });
     footer.before(this.picker.root);
-    this.begin = summary.createEl("button", { text: t("startFreeCheck"), attr: { type: "submit" }, cls: "mod-cta" });
+    this.cancel = buttons.createEl("button", { text: t("cancel"), cls: "study-cards-quiet-button", attr: { type: "button" } });
+    this.cancel.onclick = close;
+    this.begin = buttons.createEl("button", { text: t("startFreeCheck"), attr: { type: "submit" }, cls: "mod-cta" });
     this.root.onsubmit = (event) => {
       event.preventDefault();
       if (!this.begin.disabled) void this.submit();

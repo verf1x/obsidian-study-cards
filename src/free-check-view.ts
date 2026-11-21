@@ -1,8 +1,9 @@
-import { Notice, type App } from "obsidian";
+import { Notice, setIcon, type App } from "obsidian";
 import { CheckPrompt } from "./free-check-modals";
 import { FreeCheckSetup } from "./free-check-setup";
 import { canAdvance, checkScore, isCheckCard, type CheckCard, type CheckSelection } from "./free-check";
 import { localization, t } from "./localization";
+import { renderPaneAction } from "./pane-action";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
 import type { FreeGrade, FreeResult, FreeSession } from "./study-state";
@@ -29,25 +30,57 @@ export class FreeCheckView {
 
   close() { this.screen = undefined; }
 
-  renderPractice(root: HTMLElement, sectionId: string, name: string, introductory: boolean,
+  get settingUp() { return this.screen?.mode === "setup"; }
+
+  dismissSetup() {
+    if (!this.settingUp) return true;
+    if (this.saving) return false;
+    this.close();
+    return true;
+  }
+
+  renderPractice(root: HTMLElement, toolbar: HTMLElement, sectionId: string, name: string, introductory: boolean,
     openNotes: () => void) {
     const { session } = this.study.freeChecks;
     const cards = this.study.cards(sectionId);
-    const actions = root.createDiv({ cls: "study-cards-practice-row" });
-    const buttons = actions.createDiv({ cls: "study-cards-controls" });
     if (session) {
-      buttons.createEl("button", { text: t("continueFreeCheck"), cls: "mod-cta", attr: { "data-focus": "check-continue" } })
-        .onclick = () => this.showCheck(session.id);
+      const resume = root.createDiv({ cls: "study-cards-practice-resume" });
+      const label = resume.createDiv();
+      label.createEl("strong", { text: checkName(session) });
+      const position = t("checkPosition", { position: session.position + 1, total: session.cardIds.length });
+      label.createEl("p", { text: session.sectionId === sectionId ? position : `${this.sectionName(session.sectionId)} · ${position}` });
+      const button = resume.createEl("button", { cls: "mod-cta", attr: { "data-focus": "check-continue" } });
+      setIcon(button.createSpan({ cls: "study-cards-nav-icon", attr: { "aria-hidden": "true" } }), "circle-play");
+      button.createSpan({ text: t("continueFreeCheck") });
+      button.onclick = () => this.showCheck(session.id);
     }
-    const start = buttons.createEl("button", {
-      text: t(session ? "newFreeCheck" : "testYourself"), cls: session ? undefined : "mod-cta", attr: { "data-focus": "check-start" },
+    const start = (session ? root : toolbar).createEl("button", {
+      cls: session ? undefined : "mod-cta study-cards-test-action", attr: { "data-focus": "check-start" },
     });
+    if (session) renderPaneAction(start, "circle-play", t("newFreeCheck"), "");
+    else {
+      setIcon(start.createSpan({ cls: "study-cards-nav-icon", attr: { "aria-hidden": "true" } }), "circle-play");
+      start.createSpan({ text: t("testYourself") });
+    }
     const eligible = cards.some(isCheckCard);
     start.disabled = this.blocked() || !eligible;
     start.onclick = () => this.setup(sectionId, name, { focus: "check-start", introductory });
     if (!eligible) {
+      const actions = root.createDiv({ cls: "study-cards-practice-row" });
       actions.createEl("p", { text: t(cards.length ? "sectionWithoutEligibleCards" : "sectionWithoutCards") });
       actions.createEl("button", { text: t("notes") }).onclick = openNotes;
+    }
+    const history = this.study.freeChecks.results.filter((result) => result.sectionId === sectionId);
+    const latest = history[history.length - 1];
+    if (latest) {
+      const available = new Set(cards.filter(isCheckCard).map(({ id }) => id));
+      const { mistakes } = checkScore(latest, available);
+      if (mistakes.some((id) => available.has(id))) {
+        const retry = root.createEl("button");
+        renderPaneAction(retry, "rotate-cw", t("retryMistakes"), t("sectionCardCount", { count: mistakes.length }));
+        retry.disabled = this.blocked();
+        retry.onclick = () => this.retry(latest);
+      }
     }
   }
 
@@ -55,27 +88,20 @@ export class FreeCheckView {
     const { results } = this.study.freeChecks;
     const history = results.filter((result) => result.sectionId === sectionId).reverse();
     const latest = history[0];
-    if (latest) {
-      const available = new Set(this.study.cards(sectionId).filter(isCheckCard).map(({ id }) => id));
-      const { mistakes } = checkScore(latest, available);
-      const actions = root.createDiv({ cls: "study-cards-controls study-cards-practice-row" });
-      if (mistakes.some((id) => available.has(id))) {
-        const retry = actions.createEl("button", { text: t("retryMistakes") });
-        retry.disabled = this.blocked();
-        retry.onclick = () => this.retry(latest);
-      }
-      actions.createEl("button", { text: t("latestCheckResult") }).onclick = () => this.showResult(latest.id);
-    }
-    const details = root.createEl("details", { cls: "study-cards-item", attr: { "data-card": "check-history" } });
+    const details = root.createEl("details", { attr: { "data-card": "check-history" } });
     details.open = opened.has("check-history");
-    details.createEl("summary", { text: t("checkHistoryCount", { count: history.length }) });
-    if (!latest) details.createEl("p", { text: t("noCheckResults") });
+    const visibleHistory = details.createEl("summary");
+    const latestScore = latest ? checkScore(latest, new Set()) : undefined;
+    renderPaneAction(visibleHistory, "history", t("checkHistory"), latestScore && latest
+      ? t("checkHistoryScore", { graded: latestScore.graded, total: latest.cardIds.length, correct: latestScore.correct })
+      : t("noCheckResults"));
     for (const result of history) {
       const { correct, graded } = checkScore(result, new Set());
       const date = localization.date(result.finishedAt);
-      const row = details.createDiv({ cls: "study-cards-controls" });
-      row.createEl("button", { text: t("checkHistoryEntry", { check: checkName(result), date }) }).onclick = () => this.showResult(result.id);
-      row.createSpan({ text: t("checkHistoryScore", { graded, total: result.cardIds.length, correct }) });
+      const row = details.createEl("button");
+      renderPaneAction(row, "file-check", t("checkHistoryEntry", { check: checkName(result), date }),
+        t("checkHistoryScore", { graded, total: result.cardIds.length, correct }));
+      row.onclick = () => this.showResult(result.id);
     }
   }
 
@@ -161,7 +187,9 @@ export class FreeCheckView {
         () => {
           this.screen = undefined;
           this.render();
-          this.focus(`[data-focus="${CSS.escape(focus)}"]`);
+          const target = this.root.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focus)}"]`)
+            ?? this.root.querySelector<HTMLElement>('[data-focus="cards-heading"], [data-focus="practice"]');
+          target?.focus();
         },
         (selection) => this.start(previousId, selection));
       this.screen = { mode: "setup", form };
@@ -220,19 +248,43 @@ export class FreeCheckView {
 
     const panel = root.createDiv({ cls: "study-cards-free-panel", attr: { "aria-label": checkName(session) } });
     const header = panel.createDiv({ cls: "study-cards-controls study-cards-free-header" });
-    header.createEl("strong", { text: t("checkSectionHeading", { check: checkName(session), section: this.sectionName(session.sectionId) }) });
-    header.createEl("button", { text: t("backToPractice") }).onclick = () => this.practice();
-    const graded = Object.keys(session.grades).length;
-    panel.createEl("p", { cls: "study-cards-free-progress", text: t("checkQuestionProgress", { position: session.position + 1, total: session.cardIds.length, graded }) });
+    const exit = header.createEl("button", { cls: "study-cards-quiet-button" });
+    setIcon(exit.createSpan({ cls: "study-cards-nav-icon", attr: { "aria-hidden": "true" } }), "arrow-left");
+    exit.createSpan({ text: t("backToPractice") });
+    exit.onclick = () => this.practice();
+    const { correct, mistakes, graded } = checkScore(session, new Set());
+    const position = t("checkPosition", { position: session.position + 1, total: session.cardIds.length });
+    header.createEl("p", { cls: "study-cards-free-progress", text: position });
+    const progress = panel.createDiv({ cls: "study-cards-progress-strip", attr: {
+      role: "img", "aria-label": [
+        t("checkQuestionProgress", { position: session.position + 1, total: session.cardIds.length, graded }),
+        t("correctCount", { count: correct }),
+        t("mistakeCount", { count: mistakes.length }),
+      ].join(". "),
+    } });
+    for (const [index, cardId] of session.cardIds.entries()) {
+      progress.createSpan({ attr: { "data-current": String(index === session.position), "data-grade": session.grades[cardId] ?? "" } });
+    }
     const body = panel.createDiv({ cls: "study-cards-free-body" });
     body.createEl("h2", { cls: "study-cards-free-question", text: card?.question ?? t("cardUnavailable"),
       attr: { tabindex: "-1" } });
+    if (card) body.createEl("p", { cls: "study-cards-question-source", text: card.path });
     if (card && shown) this.renderAnswer(body, card);
+    if (card && !shown) {
+      const reveal = body.createDiv({ cls: "study-cards-reveal-row" });
+      const button = reveal.createEl("button", { text: t("revealAnswer"), cls: "mod-cta" });
+      button.onclick = () => {
+        this.revealed.add(card.id);
+        this.render();
+        this.focus(".study-cards-free-answer-title");
+      };
+      reveal.createEl("p", { text: t("recallPrompt") });
+    }
     if (!card) body.createEl("p", { text: t("canSkipQuestion") });
     if (grade && (!card || !shown)) body.createEl("p", { text: t("currentGrade", { grade: t(grade) }) });
 
     const footer = panel.createDiv({ cls: "study-cards-free-footer" });
-    if (card) this.renderGrading(footer, card, grade, session, revision);
+    if (card && shown) this.renderGrading(footer, card, grade, session, revision);
     const navigation = footer.createDiv({ cls: "study-cards-controls" });
     const back = navigation.createEl("button", { text: t("back") });
     back.disabled = this.blocked() || session.position === 0;
@@ -248,10 +300,11 @@ export class FreeCheckView {
   }
 
   private renderAnswer(body: HTMLElement, card: CheckCard) {
-    body.createEl("h3", { text: t("answer"), cls: "study-cards-free-answer-title", attr: { tabindex: "-1" } });
-    if (this.answer?.updated) body.createEl("p", { text: t("answerUpdated"), attr: { role: "status" } });
+    const answer = body.createDiv({ cls: "study-cards-reference-answer" });
+    answer.createEl("h3", { text: t("answerFromNote"), cls: "study-cards-free-answer-title", attr: { tabindex: "-1" } });
+    if (this.answer?.updated) answer.createEl("p", { text: t("answerUpdated"), attr: { role: "status" } });
     const scroll = this.answerScroll;
-    void this.renderMarkdown(body.createDiv({ cls: "study-cards-free-answer" }), card).then(() => {
+    void this.renderMarkdown(answer.createDiv({ cls: "study-cards-free-answer" }), card).then(() => {
       if (body.isConnected) body.scrollTop = scroll;
     });
     body.onscroll = () => { if (body.isConnected) this.answerScroll = body.scrollTop; };
@@ -259,14 +312,6 @@ export class FreeCheckView {
 
   private renderGrading(root: HTMLElement, card: CheckCard, grade: FreeGrade | null, session: FreeSession, revision: string | null) {
     const actions = root.createDiv({ cls: "study-cards-controls study-cards-free-grades" });
-    if (!this.revealed.has(card.id)) {
-      actions.createEl("button", { text: t("revealAnswer"), cls: "mod-cta" }).onclick = () => {
-        this.revealed.add(card.id);
-        this.render();
-        this.focus(".study-cards-free-answer-title");
-      };
-      return;
-    }
     for (const value of ["correct", "incorrect"] as const) {
       const button = actions.createEl("button", { text: t(value), attr: { "aria-pressed": String(grade === value), "data-grade": value } });
       button.disabled = this.blocked();
@@ -305,23 +350,27 @@ export class FreeCheckView {
     const report = root.createDiv({ cls: "study-cards-free-report" });
     report.createEl("h2", { text: t("checkResultHeading", { check: checkName(result) }), cls: "study-cards-free-title", attr: { tabindex: "-1" } });
     report.createEl("p", { text: this.sectionName(result.sectionId) });
+    const totals = report.createDiv({ cls: "study-cards-free-totals" });
+    for (const [label, count] of [["correct", correct], ["incorrect", mistakes.length], ["ungradedAnswers", ungraded]] as const) {
+      const item = totals.createDiv({ attr: { "data-total": label } });
+      item.createEl("strong", { text: t("resultTotalValue", { count }) });
+      item.createEl("small", { text: t(label) });
+    }
     const score = report.createDiv({ cls: "study-cards-free-score" });
     score.createEl("strong", { text: graded ? t("percentCorrect", { percent: localization.percent(correct / graded) }) : t("noGradedAnswers") });
     score.createEl("p", { text: t("gradedCoverage", { graded, total: result.cardIds.length }) });
-    const counts = report.createEl("ul");
-    for (const [label, count] of [
-      ["correctCount", correct], ["mistakeCount", mistakes.length],
-      ["ungradedAvailableCount", ungraded - unavailable], ["ungradedUnavailableCount", unavailable],
-    ] as const) counts.createEl("li", { text: t(label, { count }) });
+    if (ungraded) score.createEl("p", { text: [t("ungradedAvailableCount", { count: ungraded - unavailable }),
+      t("ungradedUnavailableCount", { count: unavailable })].join(" · ") });
 
     if (mistakes.length) {
       report.createEl("h3", { text: t("mistakeQuestions") });
-      const list = report.createEl("ol");
+      const list = report.createEl("ol", { cls: "study-cards-mistake-list" });
       for (const id of mistakes) list.createEl("li", {
         text: cards.get(id)?.question ?? t("numberedUnavailableCard", { position: result.cardIds.indexOf(id) + 1 }),
       });
     }
-    const actions = report.createDiv({ cls: "study-cards-controls" });
+    const actions = report.createDiv({ cls: "study-cards-controls study-cards-report-actions" });
+    actions.createEl("button", { text: t("backToPractice"), cls: "study-cards-quiet-button" }).onclick = () => this.practice();
     if (mistakes.length) {
       const canRetry = mistakes.some((id) => cards.has(id));
       if (!canRetry) report.createEl("p", { text: t("allMistakesUnavailable") });
@@ -329,7 +378,6 @@ export class FreeCheckView {
       retry.disabled = this.blocked() || !canRetry;
       retry.onclick = () => this.retry(result);
     }
-    actions.createEl("button", { text: t("backToPractice") }).onclick = () => this.practice();
   }
 
   private perform(action: () => Promise<void>, after: () => void) {
