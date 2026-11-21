@@ -67,7 +67,7 @@ export type Confirmation = { confirmed: true } | { confirmed: false; paths: read
 
 const emptyData: StudyData = { sections: [], activeSection: null, knownNotes: {}, progress: {} };
 const hasPath = (path: string, parent: string) => parent === "" || path === parent || path.startsWith(parent + "/");
-const remapPath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
+export const remapPath = (path: string, oldPath: string, newPath: string) => hasPath(path, oldPath)
   ? newPath + path.slice(oldPath.length) : path;
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 

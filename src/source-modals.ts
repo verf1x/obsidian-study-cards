@@ -1,6 +1,6 @@
 import { FuzzySuggestModal, Modal, Notice, TFile, TFolder, type App, type TAbstractFile } from "obsidian";
 import { single, type Format } from "./markdown";
-import { type EnrollmentPreview, type PreviewRow, type SourceRequest, type StudyCards } from "./study-cards";
+import { remapPath, type EnrollmentPreview, type PreviewRow, type SourceRequest, type StudyCards } from "./study-cards";
 
 export type VaultChange = { path: string; oldPath?: string };
 export type WatchVault = (listener: (change: VaultChange) => void) => () => void;
@@ -68,6 +68,7 @@ function formatFields(root: HTMLElement, initial: Format, onChange: (format: For
 export class SelectSourcesModal extends Modal {
   private readonly requests: SourceRequest[];
   private previousPreview?: EnrollmentPreview;
+  private unsubscribe?: () => void;
 
   constructor(app: App, private readonly study: StudyCards, private readonly watch: WatchVault,
     private readonly section: string, initial: SourceRequest[], private readonly lockSelection = false) {
@@ -78,7 +79,23 @@ export class SelectSourcesModal extends Modal {
   onOpen() {
     this.setTitle(this.lockSelection ? "Настроить источник" : "Добавить источники");
     this.contentEl.addClass("study-cards-source-modal");
+    this.unsubscribe = this.watch(({ path, oldPath }) => {
+      if (!oldPath) return;
+      this.previousPreview?.rename(oldPath, path);
+      let changed = false;
+      for (const request of this.requests) {
+        const nextPath = remapPath(request.path, oldPath, path);
+        if (nextPath === request.path) continue;
+        request.path = nextPath;
+        changed = true;
+      }
+      if (changed) this.render();
+    });
     this.render();
+  }
+
+  onClose() {
+    this.unsubscribe?.();
   }
 
   private render() {
