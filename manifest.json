@@ -1,7 +1,7 @@
 {
   "id": "study-cards",
   "name": "Study Cards",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "minAppVersion": "1.15.1",
   "description": "Turn Markdown notes into study cards and organize them into study sections.",
   "author": "verf1x",
