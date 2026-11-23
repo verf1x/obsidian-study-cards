@@ -27,7 +27,7 @@ const mixed = "# HTTP\n\n" + topics.map(([group, questions]) =>
       TTL: "TTL задаёт период, в течение которого данные можно использовать без повторной проверки.",
       TLS: "TLS устанавливает защищённое соединение и проверяет подлинность сервера.",
       GET: "GET запрашивает представление ресурса.",
-    }[word] ?? "Учебная запись для проверки разбора заголовков.")).join("\n\n")).join("\n\n");
+    }[word] ?? "Учебная запись для примера карточек по заголовкам.")).join("\n\n")).join("\n\n");
 
 function note(id, name, content, saved, folder = "Материалы") {
   let inFence = false;
@@ -162,47 +162,38 @@ function startEnrollment(newSection) {
   headerMenu = false;
   layout = {
     newSection, name: t("Новый раздел", "New study section"), query: "", folder: "", help: false, phase: "browse",
-    checked: new Set(), mode: new Map(), source: new Map(), focus: "", preview: "", question: 0,
+    checked: new Set(), mode: new Map(), focus: "", preview: "", question: 0,
   };
 }
 const noteModes = (note) => layout.mode.get(note.id) ?? note.saved ?? "";
 function status(note) {
   const mode = noteModes(note);
-  if (!mode) return t("Выберите способ разбора", "Choose how to make cards");
-  if (mode === "levels") return t("Выберите уровень заголовков", "Choose a heading level");
+  if (!mode) return t("Выберите, как сделать карточки", "Choose how to make cards");
   const description = mode.startsWith("h") && mode !== "heading" ? "#".repeat(Number(mode[1])) : t("Вся заметка", "Whole note");
   return countText(cards(note, mode).length) + " · " + description +
-    (note.saved ? t(" · Сохранённый разбор", " · Saved") : "");
+    (note.saved ? t(" · Настройки сохранены", " · Saved") : "");
 }
 function format(note) {
-  if (note.saved) return '<p class="hint">' + t("Используется сохранённый разбор заметки.", "This note uses its saved format.") + "</p>";
+  if (note.saved) return "";
   const mode = noteModes(note);
-  const family = mode.startsWith("h") && mode !== "heading" || mode === "levels" ? "levels" : mode ? "single" : "";
-  let detail = "";
-  let hint = "";
-  if (family === "levels") {
-    const choices = [1, 2, 3, 4, 5, 6].map((level) =>
-      option("h" + level, "#".repeat(level) + " — " + countText(cards(note, "h" + level).length), mode)).join("");
-    detail = '<label>' + t("По каким заголовкам делить", "Split at heading level") + '<select data-key="level-' +
-      note.id + '" data-change="level" data-id="' + note.id + '">' + option("levels", t("Выберите уровень", "Choose a level"), mode) + choices + "</select></label>";
-    hint = t("Заголовок выбранного уровня становится вопросом. Ответ продолжается до следующего заголовка того же или более высокого уровня.",
-      "Each heading at this level becomes a question. Its answer ends at the next heading at the same or a higher level.");
-    if (mode !== "levels" && !cards(note, mode).length) hint = t("В этой заметке нет заголовков выбранного уровня.", "This note has no headings at this level.");
-  } else if (family === "single") {
-    detail = '<label>' + t("Откуда взять вопрос", "Question comes from") + '<select data-key="question-' + note.id +
-      '" data-change="level" data-id="' + note.id + '">' +
-      option("heading", t("Первый заголовок #", "First # heading"), mode) +
-      option("filename", t("Имя файла", "File name"), mode) + "</select></label>";
-    if (mode === "heading" && !note.headings.some(({ level }) => level === 1)) {
-      hint = t("В заметке нет заголовка #. Вопросом станет имя файла.", "Without a # heading, the question comes from the file name.");
-    }
-  }
-  return '<div class="format"><label>' + t("Как сделать карточки", "Make cards from") + '<select data-key="mode-' +
-    note.id + '" data-change="mode" data-id="' + note.id + '">' +
-    option("", t("Выберите способ", "Choose a method"), family) +
-    option("single", t("Вся заметка — одна карточка", "Whole note — one card"), family) +
-    option("levels", t("Несколько карточек по заголовкам", "Multiple cards from headings"), family) +
-    "</select></label>" + detail + "</div>" + (hint ? '<p class="hint">' + hint + "</p>" : "");
+  const hasHeading = note.headings.some(({ level }) => level === 1);
+  const wholeNote = (hasHeading
+    ? option("heading", t("1 карточка · первый #", "1 card · first # heading"), mode) : "") +
+    option("filename", t("1 карточка · имя файла", "1 card · file name"), mode);
+  const levels = [1, 2, 3, 4, 5, 6].map((level) => {
+    const value = "h" + level;
+    return option(value, "#".repeat(level) + " — " + countText(cards(note, value).length), mode);
+  }).join("");
+  const missing = mode && !cards(note, mode).length
+    ? '<p class="hint warning">' + t("В этой заметке нет заголовков выбранного уровня.", "This note has no headings at this level.") + "</p>"
+    : "";
+  const label = t("Как сделать карточки", "How to make cards");
+  return '<div class="format"><select aria-label="' + label + '" data-key="mode-' + note.id +
+    '" data-change="mode" data-id="' + note.id + '">' +
+    option("", label, mode) +
+    '<optgroup label="' + t("Вся заметка", "Whole note") + '">' + wholeNote + "</optgroup>" +
+    '<optgroup label="' + t("По заголовкам", "By heading level") + '">' + levels + "</optgroup>" +
+    "</select></div>" + missing;
 }
 
 function answerMarkup(text) {
@@ -261,13 +252,16 @@ function noteRow(note, how) {
   const selected = layout.checked.has(note.id);
   const detailed = layout.focus === note.id || selected;
   const label = note.name + ".md";
-  const key = how === "C" ? "browse" : "configure";
+  const button = note.saved ? t("Карточки", "Cards") : t("Настроить карточки", "Set up cards");
+  const buttonName = note.saved
+    ? t("Карточки из заметки «" + label + "»", "Cards from “" + label + "”")
+    : t("Настроить карточки для заметки «" + label + "»", "Set up cards for “" + label + "”");
   return '<article class="note"><div class="note-row"' + (selected ? " data-selected" : "") +
     '><label><input type="checkbox" data-key="check-' + note.id + '" data-change="check" data-id="' + note.id +
     '"' + (selected ? " checked" : "") + '><span>' + escape(label) + '<small>' +
     escape(selected || note.saved || noteModes(note) ? status(note) : note.folder) +
-    '</small></span></label>' + (how !== "C" ? action(key, t(how === "A" ? "Разбор" : "Открыть", how === "A" ? "Format" : "Open"), "", note.id)
-      .replace("<button ", '<button aria-label="' + escape(t(how === "A" ? "Разбор" : "Открыть", how === "A" ? "Format" : "Open") + " " + label) + '" ' +
+    '</small></span></label>' + (how !== "C" ? action("configure", button, "", note.id)
+      .replace("<button ", '<button aria-label="' + escape(buttonName) + '" ' +
         (how === "A" ? 'aria-expanded="' + detailed + '" ' : "")) : "") +
     "</div>" + (how === "A" && detailed ? '<div class="note-detail">' + format(note) + preview(note) + "</div>" : "") + "</article>";
 }
@@ -294,23 +288,26 @@ function enrollment() {
     found.map((note) => noteRow(note, how)).join("") || '<p class="notice">' + t("Заметки не найдены.", "No matching notes.") + "</p>";
   const selector = how === "C" ? '<div class="stage">' + action("browse", t("Выбор заметок", "Choose notes"))
     .replace("<button ", '<button aria-pressed="' + !review + '" ') +
-    action("review", t("Разбор выбранных", "Format selected"), "", "", !checked.length)
+    action("review", t("Настройки карточек", "Card setup"), "", "", !checked.length)
       .replace("<button ", '<button aria-pressed="' + review + '" ') + "</div>" : "";
   const help = '<details class="help"' + (layout.help ? " open" : "") + '><summary data-key="help">' +
-    t("Как из заметок получаются карточки", "How notes become cards") + "</summary>" + examples() + "</details>";
+    t("Как из заметок получаются карточки", "How notes become cards") + "</summary>" + examples() +
+    '<p class="hint">' + t("Заголовок выбранного уровня становится вопросом. Ответ заканчивается перед следующим заголовком того же или более высокого уровня.",
+      "Each heading at this level becomes a question. Its answer ends at the next heading at the same or a higher level.") +
+    "</p></details>";
   const toolbar = review ? "" : '<div class="toolbar"><input type="search" data-key="search" id="notes-search" value="' +
     escape(layout.query) + '" placeholder="' + t("Найти заметку", "Find a note") + '" aria-label="' + t("Найти заметку", "Find a note") + '">' +
     '<select data-key="folder" data-change="folder" aria-label="' + t("Найти папку", "Find folder") + '">' +
     option("", t("Все папки", "All folders"), layout.folder) +
     [...new Set(notes.map(({ folder }) => folder))].map((folder) => option(folder, folder, layout.folder)).join("") +
     "</select></div>";
-  const context = how === "B" ? '<section class="inspector" data-scroll="inspector" tabindex="0" aria-label="' + t("Разбор заметки", "Note format") +
+  const context = how === "B" ? '<section class="inspector" data-scroll="inspector" tabindex="0" aria-label="' + t("Настройки карточек", "Card setup") +
     '">' + (showNote ? '<h2>' + escape(showNote.name) + "</h2>" + format(showNote) + preview(showNote) :
-    '<p class="muted">' + t("Откройте заметку, чтобы выбрать разбор и увидеть карточки.", "Open a note to choose its format and see its cards.") + "</p>") + "</section>" : "";
+    '<p class="muted">' + t("Выберите заметку, чтобы настроить карточки или посмотреть их.", "Choose a note to set up or preview its cards.") + "</p>") + "</section>" : "";
   const footer = '<footer class="connect-footer"><small role="status">' + t("Выбрано", "Selected") + " · " + countText(total) +
     (invalid.length ? '<span class="warning"> · ' + t("Нужна настройка: ", "Needs a format: ") + invalid.length + "</span>" : "") +
     '</small><div class="actions">' + (how === "C" && !review ?
-      action("review", t("К разбору", "Continue to format"), "primary", "", !checked.length) :
+      action("review", t("Настроить карточки", "Set up cards"), "primary", "", !checked.length) :
       action("finish", layout.newSection ? t("Создать и подключить", "Create and connect") : t("Подключить заметки", "Connect notes"), "primary", "", empty)) +
     action("cancel", t("Отмена", "Cancel"), "text") + "</div></footer>";
   return '<section class="enrollment" data-variant="' + how + '"><div class="enrollment-head"><div class="headline"><h1>' +
@@ -474,13 +471,7 @@ document.addEventListener("change", ({ target }) => {
     else layout.checked.delete(id);
   }
   if (change === "mode") {
-    const mode = target.value === "single" ? layout.source.get(id) ?? "heading" : target.value;
-    layout.mode.set(id, mode);
-    layout.question = 0;
-  }
-  if (change === "level") {
     layout.mode.set(id, target.value);
-    if (["filename", "heading"].includes(target.value)) layout.source.set(id, target.value);
     layout.question = 0;
   }
   if (change === "preview-question") layout.question = Number(target.value);

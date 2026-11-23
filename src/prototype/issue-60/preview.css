@@ -26,7 +26,7 @@
   --warn: #854320;
 }
 * { box-sizing: border-box; }
-body { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: 100dvh; margin: 0; color: var(--text); background: var(--page); }
+body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; height: 100dvh; margin: 0; color: var(--text); background: var(--page); }
 button, select, input { font: inherit; color: inherit; }
 button, select, input:not([type="checkbox"]) {
   border: 1px solid var(--line);
@@ -84,8 +84,7 @@ small, .muted { color: var(--quiet); }
 .note-row small { display: block; }
 .note-row > button { flex: none; }
 .note-detail, .review-detail { padding: .65rem; }
-.format { display: flex; flex-wrap: wrap; gap: .48rem; align-items: end; }
-.format label, .form-label { display: grid; gap: .18rem; max-width: 100%; min-width: 0; }
+.form-label { display: grid; gap: .18rem; max-width: 100%; min-width: 0; }
 .format select { max-width: 100%; }
 .hint { font-size: .87rem; margin: .35rem 0 .5rem; color: var(--quiet); }
 .warning { color: var(--warn); }
@@ -117,7 +116,7 @@ small, .muted { color: var(--quiet); }
 dialog { color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: .65rem; padding: 1rem; width: min(30rem, calc(100% - 2rem)); }
 dialog::backdrop { background: #14101999; }
 dialog form { display: grid; gap: .8rem; }
-#tools { justify-self: center; margin: .15rem .4rem .5rem; width: max-content; max-width: calc(100% - .75rem); display: flex; justify-content: center; flex-wrap: wrap; align-items: center; gap: .25rem; padding: .25rem; border: 1px solid var(--line); background: var(--surface); border-radius: .55rem; }
+#tools { justify-self: center; margin: .15rem .4rem .5rem; width: max-content; max-width: calc(100% - .8rem); display: flex; justify-content: center; flex-wrap: wrap; align-items: center; gap: .25rem; padding: .25rem; border: 1px solid var(--line); background: var(--surface); border-radius: .55rem; }
 #tools button { padding: .22rem .46rem; font-size: .78rem; }
 #tools strong { padding-inline: .3rem; font-size: .78rem; }
 #tools svg { display: block; }
