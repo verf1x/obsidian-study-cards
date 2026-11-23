@@ -108,6 +108,7 @@ export class SourceEnrollment {
   private readonly unsubscribe: () => void;
   private readonly connectedFiles: Set<string>;
   private opened?: OpenNote;
+  private revealSettings = false;
   private answer?: Component;
   private rows: PreviewRow[] = [];
   private pending = new Set<string>();
@@ -323,6 +324,16 @@ export class SourceEnrollment {
     });
     if (!this.list.childElementCount) this.list.createEl("p", { text: t("noMatchingNotes") });
     this.list.scrollTop = scroll;
+    if (this.revealSettings) {
+      this.revealSettings = false;
+      const settings = this.list.querySelector(".study-cards-enrollment-settings");
+      if (settings) {
+        const list = this.list.getBoundingClientRect();
+        const { top, bottom } = settings.getBoundingClientRect();
+        if (top < list.top) this.list.scrollTop += top - list.top;
+        else if (bottom > list.bottom) this.list.scrollTop += Math.min(top - list.top, bottom - list.bottom);
+      }
+    }
     if (focused) this.list.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   }
 
@@ -355,11 +366,11 @@ export class SourceEnrollment {
   private drawNote(root: HTMLElement, row: PreviewRow, source: SourceRequest) {
     const item = root.createDiv({ cls: "study-cards-enrollment-note" });
     const summary = item.createDiv({ cls: "study-cards-enrollment-row" });
-    const label = summary.createEl("label");
+    const label = summary.createEl("label", { attr: { title: row.path } });
     const key = JSON.stringify([source.kind, source.path, row.path]);
     const opened = this.opened;
     const isOpen = opened?.kind === source.kind && opened.sourcePath === source.path && opened.path === row.path;
-    const check = label.createEl("input", { type: "checkbox", attr: { "data-focus": key } });
+    const check = label.createEl("input", { type: "checkbox", attr: { "aria-label": row.path, "data-focus": key } });
     check.checked = row.checked;
     check.onchange = () => {
       this.preview.choose(row.source, row.path, { checked: check.checked });
@@ -367,7 +378,7 @@ export class SourceEnrollment {
       else if (isOpen) this.opened = undefined;
       this.edit(row.path);
     };
-    label.createSpan({ text: row.path });
+    label.createSpan({ text: row.path.split("/").pop() });
     if (!row.checked) return;
     const caption = row.cards.length ? `${formatName(row.format)} · ${t("sectionCardCount", { count: row.cards.length })}` : t("configure");
     const expand = summary.createEl("button", { text: caption, cls: "study-cards-quiet-button",
@@ -388,6 +399,7 @@ export class SourceEnrollment {
 
   private openNote(row: PreviewRow, source: SourceRequest) {
     this.opened = { kind: source.kind, sourcePath: source.path, path: row.path, preview: false, question: 0 };
+    this.revealSettings = true;
   }
 
   private drawSettings(item: HTMLElement, row: PreviewRow, opened: OpenNote, key: string) {
