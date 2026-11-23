@@ -560,6 +560,7 @@ test("обновляет предпросмотр папки и сохраняе
   preview.choose(0, "Папка/Черновик.md", { checked: true });
   assert.equal((await preview.refresh()).find(({ path }) => path === "Папка/Черновик.md")?.needsFormat, true);
   preview.choose(0, "Папка/Черновик.md", { format: collection });
+  assert.deepEqual(await preview.confirm(), { confirmed: false, paths: ["Папка/Черновик.md"] });
   await vault.move("Папка/Черновик.md", "Папка/Переименован.md");
   preview.rename("Папка/Черновик.md", "Папка/Переименован.md");
   await vault.edit("Папка/Переименован.md", "## Первый\nОтвет\n### Уточнение\nПример\n\n## Второй\n\n~~~md\n## В коде\n~~~\n\n# Другая тема\nВне ответа");

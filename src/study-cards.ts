@@ -1047,7 +1047,7 @@ export class StudyCards {
     for (const row of latest) {
       const old = baseline.get(key(row));
       if (old && (old.checked !== row.checked || old.excluded !== row.excluded)) stale.add(row.path);
-      if (row.checked && (!old || old.text !== row.text || !sameFormat(old.format, row.format)
+      if (row.checked && (!old || old.needsFormat || old.text !== row.text || !sameFormat(old.format, row.format)
         || row.dirty || row.error || row.needsFormat)) stale.add(row.path);
       baseline.delete(key(row));
     }
