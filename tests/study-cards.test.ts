@@ -544,6 +544,7 @@ test("обновляет предпросмотр папки и сохраняе
   await vault.files.create("Папка/Готово.md", marked + "## Вопрос\nОтвет\n");
   await vault.files.create("Папка/Черновик.md", "## Черновик\n");
   await vault.files.create("Папка/Позже.md", "## Позже\n");
+  await vault.files.create("Папка/Неполные свойства.md", "---\nqcards_source: true\nqcards_mode: collection\n---\n## Вопрос\n");
   await vault.files.create("Папка/Вложенная/Тема.md", marked + "## Вложенный вопрос\n");
   const study = await vault.open();
   const section = await study.addSection("Темы");
@@ -551,7 +552,10 @@ test("обновляет предпросмотр папки и сохраняе
   let rows = await preview.refresh();
   assert.deepEqual(Object.fromEntries(rows.map(({ path, checked }) => [path, checked])), {
     "Папка/Готово.md": true, "Папка/Черновик.md": false, "Папка/Позже.md": false,
+    "Папка/Неполные свойства.md": true,
   });
+  assert.equal(rows.find(({ path }) => path === "Папка/Неполные свойства.md")?.needsFormat, true);
+  preview.choose(0, "Папка/Неполные свойства.md", { checked: false });
   preview.choose(0, "Папка/Готово.md", { checked: false });
   preview.choose(0, "Папка/Черновик.md", { checked: true });
   assert.equal((await preview.refresh()).find(({ path }) => path === "Папка/Черновик.md")?.needsFormat, true);

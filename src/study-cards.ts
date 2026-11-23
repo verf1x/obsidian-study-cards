@@ -1003,7 +1003,7 @@ export class StudyCards {
       const requiresChoice = !note.hasSavedFormat && !data.knownNotes[path] && !memberships.length
         && checkedItems.some(({ source }) => {
           const request = requests[source]!;
-          return request.kind === "file" ? !request.format : !note.marked;
+          return request.kind === "file" ? !request.format : !note.marked || note.hasFormatProperties;
         });
       const counts = note.headingCounts();
       const needsChoice = !chosen && (requiresChoice || defaults.length > 1);
