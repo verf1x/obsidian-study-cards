@@ -2,7 +2,7 @@ import { Component, FuzzySuggestModal, Modal, Notice, TFile, TFolder, type App, 
 import { t } from "./localization";
 import { sameFormat, single, type Format } from "./markdown";
 import { renderCardMarkdown } from "./render-markdown";
-import { remapPath, type EnrollmentPreview, type PreviewRow, type Source, type SourceRequest, type StudyCards } from "./study-cards";
+import { parentFolderPath, remapPath, type EnrollmentPreview, type PreviewRow, type Source, type SourceRequest, type StudyCards } from "./study-cards";
 
 export type VaultChange = { path: string; oldPath?: string };
 export type WatchVault = (listener: (change: VaultChange) => void) => () => void;
@@ -18,10 +18,6 @@ export function sourceRequest(file: TAbstractFile): SourceRequest | undefined {
 
 function pathName(path: string) {
   return path || t("vaultRoot");
-}
-
-function noteFolder(path: string) {
-  return path.slice(0, Math.max(0, path.lastIndexOf("/")));
 }
 
 function picker(app: App, kind: SourceRequest["kind"] | undefined, select: (source: SourceRequest) => void) {
@@ -295,7 +291,7 @@ export class SourceEnrollment {
     const filter = this.folderFilter;
     if (!filter) return;
     const selected = filter.value;
-    const paths = [...new Set(this.rows.map(({ path }) => noteFolder(path)))].sort((a, b) => a.localeCompare(b));
+    const paths = [...new Set(this.rows.map(({ path }) => parentFolderPath(path)))].sort((a, b) => a.localeCompare(b));
     filter.empty();
     filter.createEl("option", { value: "", text: t("allFolders") });
     for (const path of paths) filter.createEl("option", { value: path || "/", text: pathName(path) });
@@ -309,7 +305,8 @@ export class SourceEnrollment {
     this.list.empty();
     const query = this.search?.value.trim().toLocaleLowerCase() ?? "";
     const folder = this.folderFilter?.value;
-    const matches = (path: string) => path.toLocaleLowerCase().includes(query) && (!folder || (noteFolder(path) || "/") === folder);
+    const matches = (path: string) => path.toLocaleLowerCase().includes(query)
+      && (!folder || (parentFolderPath(path) || "/") === folder);
     const groups = new Map<number, PreviewRow[]>();
     for (const row of this.rows) {
       const items = groups.get(row.source) ?? [];
@@ -413,12 +410,7 @@ export class SourceEnrollment {
       control.onclick = () => choose(choice);
     };
     option(t("wholeNote"), whole ? row.format : single, whole, "whole");
-    const headings = [...row.headingOptions];
-    // A saved H1 collection with one remaining card keeps its existing format and identity.
-    if (selected && row.format.mode === "collection" && row.format.level === 1 && !headings.some(({ level }) => level === 1)) {
-      headings.unshift({ level: 1, count: row.cards.length });
-    }
-    for (const { level, count } of headings) {
+    for (const { level, count } of row.headingOptions) {
       const choice = { mode: "collection", level } as const;
       option(`${formatName(choice)} · ${t("sectionCardCount", { count })}`, choice,
         selected && sameFormat(row.format, choice), "level-" + level);

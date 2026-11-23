@@ -486,8 +486,8 @@ class RenameSectionModal extends Modal {
     name.required = true;
     const feedback = form.createEl("p", { attr: { role: "status" } });
     const actions = form.createDiv({ cls: "study-cards-controls" });
-    const save = actions.createEl("button", { type: "submit", cls: "mod-cta", text: t("save") });
-    const cancel = actions.createEl("button", { type: "button", text: t("cancel") });
+    const save = actions.createEl("button", { attr: { type: "submit" }, cls: "mod-cta", text: t("save") });
+    const cancel = actions.createEl("button", { attr: { type: "button" }, text: t("cancel") });
     const update = () => {
       save.disabled = this.saving || !name.value.trim();
       cancel.disabled = name.disabled = this.saving;

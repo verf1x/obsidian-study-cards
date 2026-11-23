@@ -122,7 +122,12 @@ export class MarkdownNote {
 
   get hasSavedFormat() {
     const mode = this.properties?.get("qcards_mode");
-    return mode === "single" || mode === "collection";
+    if (mode === "single") {
+      const question = this.properties?.get("qcards_question");
+      return question === "heading" || question === "filename";
+    }
+    const level = this.properties?.get("qcards_heading_level");
+    return mode === "collection" && typeof level === "number" && Number.isInteger(level) && level >= 1 && level <= 6;
   }
 
   headingCounts() {

@@ -54,7 +54,7 @@ export interface PreviewRow {
 interface PlannedRow extends PreviewRow { text: string; excluded: boolean }
 export type Confirmation = { confirmed: true } | { confirmed: false; paths: readonly string[] };
 
-function selectedNotes<Row extends PreviewRow>(rows: Row[]) {
+function selectedRowsByPath<Row extends PreviewRow>(rows: Row[]) {
   return new Map(rows.filter(({ checked }) => checked).map((row) => [row.path, row]));
 }
 
@@ -64,11 +64,11 @@ export function remapPath(path: string, oldPath: string, newPath: string) {
   const relative = oldPath ? path.slice(oldPath.length + 1) : path;
   return newPath && relative ? newPath + "/" + relative : newPath || relative;
 }
-const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
+export const parentFolderPath = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 
 function includesPath(source: SourceRequest, path: string) {
   return source.kind === "file" ? source.path === path
-    : source.recursive ? hasPath(directory(path), source.path) : directory(path) === source.path;
+    : source.recursive ? hasPath(parentFolderPath(path), source.path) : parentFolderPath(path) === source.path;
 }
 
 function sourceIncludesNote(source: Source, note: MarkdownNote) {
@@ -1000,11 +1000,16 @@ export class StudyCards {
       ], data);
       const chosen = checkedItems.find(({ choice }) => choice.format)?.choice.format;
       const format = chosen ?? defaults[0] ?? note.format(single);
-      const requiresChoice = checkedItems.some(({ source }) => requests[source]!.kind === "file" && !requests[source]!.format)
-        && !note.hasSavedFormat && !data.knownNotes[path] && !memberships.length;
+      const requiresChoice = !note.hasSavedFormat && !data.knownNotes[path] && !memberships.length
+        && checkedItems.some(({ source }) => {
+          const request = requests[source]!;
+          return request.kind === "file" ? !request.format : !note.marked;
+        });
       const counts = note.headingCounts();
-      const unavailableLevel = format.mode === "collection" && !counts.has(format.level) ? format.level : undefined;
-      const needsFormat = unavailableLevel !== undefined || (!chosen && (requiresChoice || defaults.length > 1));
+      const needsChoice = !chosen && (requiresChoice || defaults.length > 1);
+      const unavailableLevel = !needsChoice && format.mode === "collection" && (!counts.has(format.level)
+        || (chosen && format.level === 1 && counts.get(1) === 1)) ? format.level : undefined;
+      const needsFormat = needsChoice || unavailableLevel !== undefined;
       const hasFirstHeading = counts.has(1);
       const headingOptions = [...counts].sort(([a], [b]) => a - b)
         .filter(([level, count]) => level !== 1 || count > 1)
@@ -1049,7 +1054,7 @@ export class StudyCards {
     for (const row of baseline.values()) if (row.checked || row.excluded) stale.add(row.path);
     if (stale.size) return { confirmed: false, paths: [...stale] } as const;
 
-    const eligible = selectedNotes(latest);
+    const eligible = selectedRowsByPath(latest);
     if (firstSection && !eligible.size && !requests.some(({ kind }) => kind === "folder")) {
       throw new StaleStudyState();
     }
@@ -1092,7 +1097,8 @@ type Choice = { checked?: boolean; format?: Format };
 type PreviewChoice = (source: number, path: string) => Choice;
 
 export class EnrollmentPreview {
-  private readonly choices = new Map<number, Map<string, Choice>>();
+  private readonly checks = new Map<number, Map<string, boolean>>();
+  private readonly formats = new Map<string, Format>();
   private rows: PlannedRow[] = [];
 
   constructor(
@@ -1103,12 +1109,15 @@ export class EnrollmentPreview {
       sectionName?: string) => Promise<Confirmation>,
   ) {}
 
-  private choice = (source: number, path: string) => this.choices.get(source)?.get(path) ?? {};
+  private choice = (source: number, path: string): Choice => ({
+    checked: this.checks.get(source)?.get(path),
+    format: this.formats.get(path),
+  });
 
   get sources(): readonly SourceRequest[] { return this.requests; }
 
   get selection() {
-    const selected = [...selectedNotes(this.rows).values()];
+    const selected = [...selectedRowsByPath(this.rows).values()];
     return {
       cards: selected.reduce((total, row) => total + row.cards.length, 0),
       needsFormat: selected.filter(({ needsFormat }) => needsFormat).length,
@@ -1117,21 +1126,18 @@ export class EnrollmentPreview {
   }
 
   replaceSources(sources: readonly SourceRequest[]) {
-    const previous = new Map(this.choices);
+    const previous = new Map(this.checks);
     const oldPositions = new Map(this.requests.map(({ kind, path }, index) => [kind + ":" + path, index]));
     const remapped = new Map<number, number>();
-    this.choices.clear();
+    this.checks.clear();
     for (const [index, source] of sources.entries()) {
       const oldIndex = oldPositions.get(source.kind + ":" + source.path);
       if (oldIndex === undefined) continue;
       const old = this.requests[oldIndex]!;
-      const choices = previous.get(oldIndex);
       const changedFormat = !sameFormat(old.format ?? single, source.format ?? single);
       if (!changedFormat) remapped.set(oldIndex, index);
-      if (!choices) continue;
-      this.choices.set(index, changedFormat
-        ? new Map([...choices].map(([path, { checked }]) => [path, { checked }]))
-        : choices);
+      const checks = previous.get(oldIndex);
+      if (checks) this.checks.set(index, checks);
     }
     this.requests.splice(0, this.requests.length, ...sources.map((source) => ({ ...source })));
     this.rows = this.rows.flatMap((row) => {
@@ -1141,26 +1147,25 @@ export class EnrollmentPreview {
   }
 
   choose(source: number, path: string, choice: Choice) {
-    if (choice.format) {
-      for (const [index, notes] of this.choices) {
-        const other = notes.get(path);
-        if (index !== source && other?.format) notes.set(path, { checked: other.checked });
-      }
+    if (choice.format) this.formats.set(path, choice.format);
+    if (choice.checked !== undefined) {
+      let notes = this.checks.get(source);
+      if (!notes) this.checks.set(source, notes = new Map());
+      notes.set(path, choice.checked);
     }
-    let notes = this.choices.get(source);
-    if (!notes) this.choices.set(source, notes = new Map());
-    notes.set(path, { ...this.choice(source, path), ...choice });
   }
 
   rename(oldPath: string, newPath: string) {
     for (const request of this.requests) request.path = remapPath(request.path, oldPath, newPath);
-    for (const notes of this.choices.values()) {
+    const renameChoices = <ChoiceValue>(notes: Map<string, ChoiceValue>) => {
       for (const [path, choice] of [...notes]) {
         if (!hasPath(path, oldPath)) continue;
         notes.delete(path);
         notes.set(remapPath(path, oldPath, newPath), choice);
       }
-    }
+    };
+    for (const notes of this.checks.values()) renameChoices(notes);
+    renameChoices(this.formats);
   }
 
   async refresh(affected?: ReadonlySet<string>): Promise<PreviewRow[]> {
