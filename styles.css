@@ -777,6 +777,10 @@
   overflow-x: auto;
 }
 
+.study-cards-enrollment-preview .study-cards-markdown :is(pre, pre > code) {
+  white-space: pre;
+}
+
 .study-cards-markdown .study-cards-table-scroll {
   margin-block: var(--p-spacing, 1rem);
 }
