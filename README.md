@@ -2,6 +2,26 @@
 
 Study Cards turns Markdown notes into study cards and organizes them into study sections.
 
+## Study Cards in action
+
+### Desktop
+
+Choose a whole note or a heading level. The form shows how many cards each choice creates.
+
+![Study Cards on Windows showing note selection, heading levels and a five-card total](docs/screenshots/desktop-connect.png)
+
+Check a full Markdown answer before connecting the notes.
+
+![Study Cards on Windows previewing an HTTP question with a Markdown table and code block](docs/screenshots/desktop-preview.png)
+
+### Android
+
+Reveal the reference answer during a free check, then revisit the questions you missed.
+
+| Free check | Results |
+| --- | --- |
+| <img src="docs/screenshots/android-free-check.png" width="280" alt="Study Cards on Android showing an English HTTP question, its reference answer and grading buttons"> | <img src="docs/screenshots/android-result.png" width="280" alt="Study Cards on Android showing two correct answers, one mistake and the option to retry"> |
+
 ## Installation
 
 For manual installation, download `main.js`, `manifest.json` and `styles.css` from the same [GitHub release](https://github.com/verf1x/obsidian-study-cards/releases). To build locally, use the Node.js version in [`.node-version`](.node-version), run `npm ci` and `npm run build`, and take the same three files from the repository root.
