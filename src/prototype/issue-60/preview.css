@@ -85,7 +85,14 @@ small, .muted { color: var(--quiet); }
 .note-row > button { flex: none; }
 .note-detail, .review-detail { padding: .65rem; }
 .form-label { display: grid; gap: .18rem; max-width: 100%; min-width: 0; }
-.format select { max-width: 100%; }
+.format-choices { display: flex; flex-wrap: wrap; gap: .35rem; }
+.format-choice { position: relative; min-width: 0; cursor: pointer; }
+.format-choice input { position: absolute; opacity: 0; inline-size: 1px; block-size: 1px; margin: 0; }
+.format-choice span { display: block; padding: .4rem .42rem; font-size: .9rem; border: 1px solid var(--line); border-radius: .45rem; background: var(--control); }
+.format-choice:hover span { background: var(--selected); }
+.format-choice input:checked + span { background: var(--selected); border-color: var(--accent); }
+.format-choice input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.question-source { display: flex; gap: .45rem; align-items: center; margin-top: .4rem; font-size: .86rem; }
 .hint { font-size: .87rem; margin: .35rem 0 .5rem; color: var(--quiet); }
 .warning { color: var(--warn); }
 .preview { border-top: 1px solid var(--line); margin-top: .6rem; padding-top: .55rem; }

@@ -168,7 +168,7 @@ function startEnrollment(newSection) {
 const noteModes = (note) => layout.mode.get(note.id) ?? note.saved ?? "";
 function status(note) {
   const mode = noteModes(note);
-  if (!mode) return t("Выберите, как сделать карточки", "Choose how to make cards");
+  if (!mode) return t("Выберите вариант", "Choose an option");
   const description = mode.startsWith("h") && mode !== "heading" ? "#".repeat(Number(mode[1])) : t("Вся заметка", "Whole note");
   return countText(cards(note, mode).length) + " · " + description +
     (note.saved ? t(" · Настройки сохранены", " · Saved") : "");
@@ -177,23 +177,25 @@ function format(note) {
   if (note.saved) return "";
   const mode = noteModes(note);
   const hasHeading = note.headings.some(({ level }) => level === 1);
-  const wholeNote = (hasHeading
-    ? option("heading", t("1 карточка · первый #", "1 card · first # heading"), mode) : "") +
-    option("filename", t("1 карточка · имя файла", "1 card · file name"), mode);
-  const levels = [1, 2, 3, 4, 5, 6].map((level) => {
+  const whole = mode === "heading" || mode === "filename";
+  const choice = (key, value, label, checked) => '<label class="format-choice"><input type="radio" name="format-' +
+    note.id + '" data-key="mode-' + note.id + "-" + key + '" data-change="mode" data-id="' + note.id + '" value="' +
+    value + '"' + (checked ? " checked" : "") + "><span>" + escape(label) + "</span></label>";
+  const levels = [1, 2, 3, 4, 5, 6].flatMap((level) => {
     const value = "h" + level;
-    return option(value, "#".repeat(level) + " — " + countText(cards(note, value).length), mode);
+    const count = cards(note, value).length;
+    if (!count || (level === 1 && count === 1)) return [];
+    return [choice(value, value, "#".repeat(level) + " · " + countText(count), mode === value)];
   }).join("");
-  const missing = mode && !cards(note, mode).length
-    ? '<p class="hint warning">' + t("В этой заметке нет заголовков выбранного уровня.", "This note has no headings at this level.") + "</p>"
+  const wholeMode = whole ? mode : hasHeading ? "heading" : "filename";
+  const fromFilename = whole && hasHeading
+    ? '<label class="question-source"><input type="checkbox" data-key="question-' + note.id +
+      '" data-change="question-source" data-id="' + note.id + '"' + (mode === "filename" ? " checked" : "") +
+      ">" + t("Вопрос из имени файла", "Use file name as the question") + "</label>"
     : "";
-  const label = t("Как сделать карточки", "How to make cards");
-  return '<div class="format"><select aria-label="' + label + '" data-key="mode-' + note.id +
-    '" data-change="mode" data-id="' + note.id + '">' +
-    option("", label, mode) +
-    '<optgroup label="' + t("Вся заметка", "Whole note") + '">' + wholeNote + "</optgroup>" +
-    '<optgroup label="' + t("По заголовкам", "By heading level") + '">' + levels + "</optgroup>" +
-    "</select></div>" + missing;
+  return '<div class="format"><div class="format-choices" role="group" aria-label="' +
+    escape(t("Карточки из заметки «" + note.name + "»", "Cards from “" + note.name + "”")) + '">' +
+    choice("whole", wholeMode, t("Вся заметка", "Whole note"), whole) + levels + "</div>" + fromFilename + "</div>";
 }
 
 function answerMarkup(text) {
@@ -470,8 +472,9 @@ document.addEventListener("change", ({ target }) => {
     if (target.checked) { layout.checked.add(id); layout.focus = id; }
     else layout.checked.delete(id);
   }
-  if (change === "mode") {
-    layout.mode.set(id, target.value);
+  if (change === "mode" || change === "question-source") {
+    const mode = change === "mode" ? target.value : target.checked ? "filename" : "heading";
+    layout.mode.set(id, mode);
     layout.question = 0;
   }
   if (change === "preview-question") layout.question = Number(target.value);
