@@ -83,6 +83,19 @@ small, .muted { color: var(--quiet); }
 .note-row > label { display: flex; flex: 1; align-items: center; gap: .55rem; min-width: 0; overflow-wrap: anywhere; }
 .note-row small { display: block; }
 .note-row > button { flex: none; }
+.enrollment[data-variant="A"] .note-row { min-height: 2.65rem; background: transparent; }
+.enrollment[data-variant="A"] .note-row:hover,
+.enrollment[data-variant="A"] .note-row[data-selected] { background: var(--surface); }
+.note-row > .row-disclosure { display: flex; align-items: center; gap: .3rem; padding: .35rem .25rem; border: 0; background: transparent; color: var(--quiet); font-size: .86rem; }
+.row-disclosure svg { flex: none; }
+.row-disclosure[aria-expanded="true"] svg { transform: rotate(180deg); }
+.enrollment[data-variant="A"] .note-detail { padding-top: 0; background: var(--surface); }
+.enrollment[data-variant="A"] .format-choice span { background: transparent; }
+.enrollment[data-variant="A"] .format-choice:hover span,
+.enrollment[data-variant="A"] .format-choice input:checked + span { background: var(--selected); }
+.preview-trigger { padding-top: .15rem; }
+.preview-trigger button { padding-inline: 0; font-size: .9rem; }
+.note-detail > .preview-trigger:first-child { padding-top: 0; }
 .note-detail, .review-detail { padding: .65rem; }
 .form-label { display: grid; gap: .18rem; max-width: 100%; min-width: 0; }
 .format-choices { display: flex; flex-wrap: wrap; gap: .35rem; }

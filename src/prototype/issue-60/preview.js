@@ -113,7 +113,7 @@ function navigation() {
   const buttons = Object.entries(navLabels).map(([key, label]) =>
     '<button data-action="navigate" data-value="' + key + '" data-key="nav-' + key + '"' +
     (pane === key ? ' aria-current="page"' : "") + ">" + label() + "</button>").join("");
-  const switcher = pane === "history" || layout ? "" :
+  const switcher = pane === "history" ? "" :
     '<details class="section-menu"' + (headerMenu ? " open" : "") + '><summary data-key="section-menu">' +
     escape(activeSection()?.name ?? t("Выбрать раздел", "Choose section")) + '</summary><div>' +
     sections.map((section) => action("section", sectionLabel(section), "", section.id)).join("") +
@@ -169,9 +169,8 @@ const noteModes = (note) => layout.mode.get(note.id) ?? note.saved ?? "";
 function status(note) {
   const mode = noteModes(note);
   if (!mode) return t("Выберите вариант", "Choose an option");
-  const description = mode.startsWith("h") && mode !== "heading" ? "#".repeat(Number(mode[1])) : t("Вся заметка", "Whole note");
-  return countText(cards(note, mode).length) + " · " + description +
-    (note.saved ? t(" · Настройки сохранены", " · Saved") : "");
+  const headings = mode.startsWith("h") && mode !== "heading" ? " · " + "#".repeat(Number(mode[1])) : "";
+  return countText(cards(note, mode).length) + headings;
 }
 function format(note) {
   if (note.saved) return "";
@@ -238,7 +237,7 @@ function preview(note) {
   if (!output.length) return "";
   const opened = layout.preview === note.id;
   const id = "preview-" + note.id;
-  if (!opened) return '<div class="preview">' + action("preview", t("Предпросмотр", "Preview"), "", note.id) + "</div>";
+  if (!opened) return '<div class="preview-trigger">' + action("preview", t("Предпросмотр", "Preview"), "text", note.id) + "</div>";
   const selection = Math.min(layout.question, output.length - 1);
   const card = output[selection];
   return '<section class="preview" id="' + id + '"><header><h2>' + t("Предпросмотр", "Preview") + '</h2>' +
@@ -252,20 +251,31 @@ function preview(note) {
 }
 function noteRow(note, how) {
   const selected = layout.checked.has(note.id);
-  const detailed = layout.focus === note.id || selected;
+  const inline = how === "A";
+  const expanded = inline && selected && layout.focus === note.id;
   const label = note.name + ".md";
-  const button = note.saved ? t("Карточки", "Cards") : t("Настроить карточки", "Set up cards");
-  const buttonName = note.saved
-    ? t("Карточки из заметки «" + label + "»", "Cards from “" + label + "”")
-    : t("Настроить карточки для заметки «" + label + "»", "Set up cards for “" + label + "”");
+  const path = note.folder + "/" + label;
+  const mode = noteModes(note);
+  let accessory = "";
+  if (inline && selected) {
+    const caption = !expanded || note.saved ? (mode ? status(note) : t("Настроить", "Set up")) : "";
+    const icon = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+    const hint = expanded ? t("Свернуть настройки для ", "Collapse settings for ") : t("Карточки из заметки ", "Cards from ");
+    accessory = action("configure", caption, "row-disclosure", note.id)
+      .replace("<button ", '<button aria-label="' + escape(hint + label) + '" aria-expanded="' + expanded + '" ')
+      .replace("</button>", icon + "</button>");
+  }
+  if (how === "B") {
+    const button = note.saved ? t("Карточки", "Cards") : t("Настроить карточки", "Set up cards");
+    accessory = action("configure", button, "", note.id)
+      .replace("<button ", '<button aria-label="' + escape(button + " · " + label) + '" ');
+  }
+  const caption = inline ? "" : '<small>' + escape(selected || mode ? status(note) : note.folder) + "</small>";
   return '<article class="note"><div class="note-row"' + (selected ? " data-selected" : "") +
-    '><label><input type="checkbox" data-key="check-' + note.id + '" data-change="check" data-id="' + note.id +
-    '"' + (selected ? " checked" : "") + '><span>' + escape(label) + '<small>' +
-    escape(selected || note.saved || noteModes(note) ? status(note) : note.folder) +
-    '</small></span></label>' + (how !== "C" ? action("configure", button, "", note.id)
-      .replace("<button ", '<button aria-label="' + escape(buttonName) + '" ' +
-        (how === "A" ? 'aria-expanded="' + detailed + '" ' : "")) : "") +
-    "</div>" + (how === "A" && detailed ? '<div class="note-detail">' + format(note) + preview(note) + "</div>" : "") + "</article>";
+    '><label title="' + escape(path) + '"><input type="checkbox" data-key="check-' + note.id +
+    '" data-change="check" data-id="' + note.id + '"' + (selected ? " checked" : "") + '><span>' + escape(label) +
+    caption + "</span></label>" + accessory + "</div>" +
+    (expanded ? '<div class="note-detail">' + format(note) + preview(note) + "</div>" : "") + "</article>";
 }
 function enrollment() {
   const how = variant();
@@ -283,7 +293,7 @@ function enrollment() {
   const name = layout.newSection ? '<label for="new-name">' + t("Название раздела", "Section name") +
     '</label><input id="new-name" data-key="new-name" value="' + escape(layout.name) + '">' :
     '<span class="muted">' + escape(activeSection()?.name ?? "") + "</span>";
-  const prompt = t("Выберите Markdown-заметки с материалом, который хотите выучить.", "Choose the Markdown notes you want to study.");
+  const prompt = t("Выберите заметки для занятий.", "Choose notes to study.");
   const body = review ? checked.map((note) =>
     '<article class="review-entry"><h2>' + escape(note.name) + '</h2><p class="hint">' + escape(status(note)) +
     '</p><div class="review-detail">' + format(note) + preview(note) + "</div></article>").join("") :
@@ -333,7 +343,9 @@ function render(focus, top = false) {
   const scroll = Object.fromEntries([...document.querySelectorAll("[data-scroll]")].map((node) => [node.dataset.scroll, node.scrollTop]));
   document.documentElement.dataset.theme = params.get("theme") ?? "dark";
   document.documentElement.lang = t("ru", "en");
-  $("#navigation").innerHTML = navigation();
+  const nav = $("#navigation");
+  nav.hidden = Boolean(layout);
+  nav.innerHTML = layout ? "" : navigation();
   $("#screen").innerHTML = layout ? enrollment() : pane === "history" ? historyPanel() : regular();
   renderTools();
   if (!top) for (const node of document.querySelectorAll("[data-scroll]")) node.scrollTop = scroll[node.dataset.scroll] ?? 0;
@@ -437,7 +449,10 @@ document.addEventListener("click", (event) => {
     return name === "rename" ? openRename() : confirmDeletion();
   }
   if (name === "cancel") layout = null;
-  if (name === "configure") layout.focus = layout.focus === value && variant() === "A" ? "" : value;
+  if (name === "configure") {
+    layout.focus = layout.focus === value && variant() === "A" ? "" : value;
+    if (variant() === "A") layout.preview = "";
+  }
   if (name === "preview") { layout.preview = layout.preview === value ? "" : value; layout.question = 0; }
   if (name === "browse" || name === "review") { layout.phase = name; layout.preview = ""; }
   if (name === "finish") connect();
@@ -469,8 +484,15 @@ document.addEventListener("change", ({ target }) => {
   if (change === "history") filter = target.value;
   if (change === "folder") layout.folder = target.value;
   if (change === "check") {
-    if (target.checked) { layout.checked.add(id); layout.focus = id; }
-    else layout.checked.delete(id);
+    if (target.checked) {
+      layout.checked.add(id);
+      layout.focus = id;
+      if (variant() === "A") layout.preview = "";
+    } else {
+      layout.checked.delete(id);
+      if (layout.focus === id) layout.focus = "";
+      if (layout.preview === id) layout.preview = "";
+    }
   }
   if (change === "mode" || change === "question-source") {
     const mode = change === "mode" ? target.value : target.checked ? "filename" : "heading";
