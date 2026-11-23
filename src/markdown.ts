@@ -120,6 +120,17 @@ export class MarkdownNote {
     };
   }
 
+  get hasSavedFormat() {
+    const mode = this.properties?.get("qcards_mode");
+    return mode === "single" || mode === "collection";
+  }
+
+  headingCounts() {
+    const counts = new Map<number, number>();
+    for (const { level } of this.headings()) counts.set(level, (counts.get(level) ?? 0) + 1);
+    return counts;
+  }
+
   private headings() {
     if (this.parsedHeadings) return this.parsedHeadings;
     const body = this.source.slice(this.bodyStart);

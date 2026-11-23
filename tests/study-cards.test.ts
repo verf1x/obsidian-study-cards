@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { IntervalSession } from "../src/interval-session";
 import { setInterfaceLanguage } from "../src/localization";
+import { single } from "../src/markdown";
 import { StudyCards, type SourceRequest, type StudyVault } from "../src/study-cards";
 
 import { SharedWriteNotApplied, StudyStorage, type StudyStorageIO } from "../src/study-storage";
@@ -109,6 +110,7 @@ test("first enrollment previews without writing and connects both formats in one
     { kind: "file", path: collection, format: { mode: "collection", level: 2 } },
     { kind: "file", path: single },
   ]);
+  preview.choose(1, single, { format: { mode: "single", question: "heading" } });
   assert.equal((await preview.refresh()).flatMap(({ cards }) => cards).length, 2);
   assert.deepEqual(study.sections, []);
   assert.equal(await vault.files.read(collection), original);
@@ -136,7 +138,7 @@ test("enrollment refresh reads affected files and an unreadable unchecked note n
   for (const path of [unreadable, good]) await vault.files.create(path, "# Question\nAnswer\n");
   vault.unreadable.add(unreadable);
   const study = await vault.open();
-  const requests = [good, unreadable].map((path) => ({ kind: "file", path }) as const);
+  const requests = [good, unreadable].map((path) => ({ kind: "file", path, format: single }) as const);
   const preview = study.previewNewSection(requests);
   preview.choose(1, unreadable, { checked: false });
   const initial = await preview.refresh();
@@ -167,6 +169,7 @@ test("a failed local selection write cannot duplicate a section that enrollment 
   const path = "Question.md";
   await vault.files.create(path, "# Question\nAnswer\n");
   const preview = study.previewNewSection([{ kind: "file", path }]);
+  preview.choose(0, path, { format: single });
   await preview.refresh();
   vault.beforeDeviceSave((value) => {
     if ((value as { activeSection: string }).activeSection !== original) throw new Error("device checkpoint failed");
@@ -515,7 +518,7 @@ test("подключает файл, сохраняет оформление и 
   await vault.files.create("Конспект.md", source);
   let study = await vault.open();
   const section = await study.addSection("История");
-  const preview = study.preview(section, [{ kind: "file", path: "Конспект.md" }]);
+  const preview = study.preview(section, [{ kind: "file", path: "Конспект.md", format: single }]);
   const [row] = await preview.refresh();
   assert.deepEqual(row?.cards.map(({ question, answer }) => [question, answer]), [["Вопрос", "Ответ"]]);
   assert.equal(await vault.files.read("Конспект.md"), source);
@@ -605,7 +608,7 @@ test("сохраняет исключение при переименовани�
   preview.choose(0, "Черновик.md", { checked: false });
   await vault.move("Черновик.md", "Пропустить.md");
   preview.rename("Черновик.md", "Пропустить.md");
-  preview.replaceSources([{ kind: "file", path: "Вопрос.md" }, ...preview.sources]);
+  preview.replaceSources([{ kind: "file", path: "Вопрос.md", format: single }, ...preview.sources]);
 
   const rows = await preview.refresh();
   assert.equal(rows.find(({ path }) => path === "Пропустить.md")?.checked, false);
@@ -620,7 +623,7 @@ test("запрашивает повторное подтверждение по�
   await vault.files.create("Тема.md", "# Старый вопрос\nСтарый ответ\n");
   const study = await vault.open();
   const section = await study.addSection("Курс");
-  const preview = study.preview(section, [{ kind: "file", path: "Тема.md" }]);
+  const preview = study.preview(section, [{ kind: "file", path: "Тема.md", format: single }]);
   await preview.refresh();
   const edited = "# Новый вопрос\nНовый ответ\n";
   vault.hook(() => vault.edit("Тема.md", edited));
@@ -651,8 +654,12 @@ test("показывает выбор формата при пересечени
   const preview = study.preview(section, [...sources]);
   assert.ok((await preview.refresh()).every(({ needsFormat }) => needsFormat));
   assert.deepEqual(await preview.confirm(), { confirmed: false, paths: ["Корень/Темы/Вопросы.md"] });
+  preview.choose(0, "Корень/Темы/Вопросы.md", { format: single });
+  await preview.refresh();
+  assert.deepEqual(preview.selection, { cards: 1, needsFormat: 0, blocked: false });
   preview.choose(1, "Корень/Темы/Вопросы.md", { format: collection });
   await preview.refresh();
+  assert.deepEqual(preview.selection, { cards: 2, needsFormat: 0, blocked: false });
   assert.deepEqual(await preview.confirm(), { confirmed: true });
   assert.deepEqual(study.cards(section).map(({ question }) => question), ["Один", "Два"]);
 
@@ -1103,7 +1110,7 @@ test("свободная проверка выбирает вопросы по �
   let study = await vault.open();
   const sectionId = await study.addSection("Раздел");
   const preview = study.preview(sectionId, [
-    { kind: "file", path: "Явный источник.md" },
+    { kind: "file", path: "Явный источник.md", format: single },
     { kind: "folder", path: "Материалы", recursive: true },
     { kind: "file", path, format: collection },
   ]);
@@ -1123,13 +1130,13 @@ test("свободная проверка выбирает вопросы по �
     /Изменилось количество/);
   assert.equal(study.freeChecks.session?.id, first.id);
 
-  const single = "Материалы/A/Карточка.md";
-  const saved = await vault.files.read(single);
-  await vault.delete(single);
-  await study.delete(single);
+  const singlePath = "Материалы/A/Карточка.md";
+  const saved = await vault.files.read(singlePath);
+  await vault.delete(singlePath);
+  await study.delete(singlePath);
   await study.moveFreeCheck(mutation(), first.id, 1);
   await study.moveFreeCheck(mutation(), first.id, -1);
-  await vault.files.create(single, saved);
+  await vault.files.create(singlePath, saved);
   study = await vault.open();
   await study.scan();
   assert.equal(study.freeCheckQuestions()[0]?.card?.question, "Второй");
@@ -1218,6 +1225,76 @@ test("ручной выбор при запуске замечает удале�
   assert.equal(study.freeChecks.session?.id, resumed.id);
   assert.deepEqual(study.sections[0]?.lastManualSelection, [first!.id, second!.id]);
   assert.deepEqual(study.cards(sectionId).map(({ id }) => id), [second!.id]);
+});
+
+test("enrollment counts real headings, requires a format for new notes and rechecks the chosen level", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  const path = "HTTP.md";
+  const body = "# HTTP\n" + Array.from({ length: 4 }, (_, chapter) =>
+    "## Chapter " + chapter + "\n" + Array.from({ length: 5 }, (_, question) =>
+      "### Question " + question + "\nAnswer\n").join("")).join("")
+    + "\n\`\`\`md\n#### Not a heading\n\`\`\`\n";
+  await vault.files.create(path, body);
+  await vault.files.create("Cache.md", "Use an ETag.\n");
+  const study = await vault.open();
+  const preview = study.previewNewSection([{ kind: "file", path }, { kind: "file", path: "Cache.md" }]);
+  const rows = await preview.refresh();
+  const http = rows.find((row) => row.path === path)!;
+  const cache = rows.find((row) => row.path === "Cache.md")!;
+  assert.equal(http.needsFormat, true);
+  assert.equal(cache.hasFirstHeading, false);
+  assert.deepEqual(http.headingOptions, [{ level: 2, count: 4 }, { level: 3, count: 20 }]);
+  assert.deepEqual(preview.selection, { cards: 0, needsFormat: 2, blocked: true });
+  assert.equal((await preview.confirm("HTTP")).confirmed, false);
+  preview.choose(cache.source, cache.path, { format: { mode: "single", question: "heading" } });
+  preview.choose(http.source, path, { format: { mode: "collection", level: 2 } });
+  const chapters = await preview.refresh();
+  assert.match(chapters.find((row) => row.path === path)!.cards[0]!.answer, /### Question 4/);
+  assert.equal(preview.selection.cards, 5);
+  preview.choose(http.source, path, { format: { mode: "collection", level: 3 } });
+  await preview.refresh();
+  assert.equal(preview.selection.cards, 21);
+  await vault.edit(path, body.replace(/^### /gm, "#### "));
+  assert.deepEqual(await preview.confirm("HTTP"), { confirmed: false, paths: [path] });
+  const edited = (await preview.refresh()).find((row) => row.path === path)!;
+  assert.equal(edited.unavailableLevel, 3);
+  assert.deepEqual(preview.selection, { cards: 1, needsFormat: 1, blocked: true });
+  preview.choose(http.source, path, { format: { mode: "collection", level: 4 } });
+  await preview.refresh();
+  assert.equal(preview.selection.cards, 21);
+  assert.deepEqual(await preview.confirm("HTTP"), { confirmed: true });
+  assert.equal(study.cards(study.activeSection!).length, 21);
+});
+
+test("renaming a section preserves an unfinished check and deletion records the latest name", async (t) => {
+  const vault = await testVault();
+  t.after(vault.cleanup);
+  let study = await vault.open();
+  const section = await study.addSection("HTTP");
+  await study.createCard(section, "Question", "", { mode: "single", question: "filename" }, false);
+  const [card] = study.cards(section);
+  const mutation = () => ({ id: randomUUID(), revision: study.freeChecks.revision });
+  const date = "2026-11-21T10:00:00Z";
+  const completed = mutation();
+  await study.startFreeCheck(completed, null, { sectionId: section, cardIds: [card!.id!] }, date);
+  await study.gradeFreeCheck(mutation(), completed.id, card!, "correct");
+  await study.finishFreeCheck(mutation(), completed.id, date);
+  const pending = mutation();
+  await study.startFreeCheck(pending, null, { sectionId: section, cardIds: [card!.id!] }, date);
+  await study.gradeFreeCheck(mutation(), pending.id, card!, "incorrect");
+  const before = structuredClone(study.progress);
+  const originalSection = structuredClone(study.sections[0]);
+  await assert.rejects(study.renameSection(section, "  "));
+  await study.renameSection(section, "  Веб  ");
+  study = await vault.open();
+  await study.scan();
+  assert.equal(study.activeSection, section);
+  assert.deepEqual(study.sections[0], { ...originalSection, name: "Веб" });
+  assert.deepEqual(study.freeChecks.session, before.freeSession);
+  assert.deepEqual(study.freeChecks.results, before.freeResults);
+  await study.removeSection(mutation(), section);
+  assert.equal((await vault.open()).freeChecks.results[0]?.sectionName, "Веб");
 });
 
 test("manual sets transfer per section and survive nonmanual checks, retries and rejected writes", async (t) => {

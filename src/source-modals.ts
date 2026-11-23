@@ -1,6 +1,7 @@
-import { Component, FuzzySuggestModal, MarkdownRenderer, Modal, Notice, TFile, TFolder, type App, type TAbstractFile } from "obsidian";
+import { Component, FuzzySuggestModal, Modal, Notice, TFile, TFolder, type App, type HoverParent, type TAbstractFile } from "obsidian";
 import { t } from "./localization";
-import { single, type Format } from "./markdown";
+import { sameFormat, single, type Format } from "./markdown";
+import { renderCardMarkdown } from "./render-markdown";
 import { remapPath, type EnrollmentPreview, type PreviewRow, type Source, type SourceRequest, type StudyCards } from "./study-cards";
 
 export type VaultChange = { path: string; oldPath?: string };
@@ -17,6 +18,10 @@ export function sourceRequest(file: TAbstractFile): SourceRequest | undefined {
 
 function pathName(path: string) {
   return path || t("vaultRoot");
+}
+
+function noteFolder(path: string) {
+  return path.slice(0, Math.max(0, path.lastIndexOf("/")));
 }
 
 function picker(app: App, kind: SourceRequest["kind"] | undefined, select: (source: SourceRequest) => void) {
@@ -36,8 +41,24 @@ function picker(app: App, kind: SourceRequest["kind"] | undefined, select: (sour
 }
 
 function formatName(format: Format) {
-  if (format.mode === "collection") return t("collectionFormat", { level: format.level });
-  return format.question === "filename" ? t("singleByFilename") : t("singleByHeading");
+  return format.mode === "collection" ? "#".repeat(format.level) : t("wholeNote");
+}
+
+export function renderEnrollmentExamples(root: HTMLElement) {
+  const examples = root.createDiv({ cls: "study-cards-enrollment-examples" });
+  for (const mode of ["singleExample", "collectionExample"] as const) {
+    const item = examples.createDiv();
+    item.createEl("strong", { text: t(mode) });
+    item.createEl("pre").createEl("code", { text: t(mode === "singleExample" ? "singleExampleMarkdown" : "collectionExampleMarkdown") });
+  }
+}
+
+interface OpenNote {
+  kind: SourceRequest["kind"];
+  sourcePath: string;
+  path: string;
+  preview: boolean;
+  question: number;
 }
 
 function formatFields(root: HTMLElement, initial: Format, onChange: (format: Format) => void) {
@@ -81,6 +102,7 @@ export class SourceEnrollment {
   private readonly preview: EnrollmentPreview;
   private readonly requests: SourceRequest[];
   private readonly search?: HTMLInputElement;
+  private readonly folderFilter?: HTMLSelectElement;
   private readonly name?: HTMLInputElement;
   private readonly list: HTMLElement;
   private readonly count: HTMLElement;
@@ -88,14 +110,15 @@ export class SourceEnrollment {
   private readonly confirm: HTMLButtonElement;
   private readonly cancel: HTMLButtonElement;
   private readonly unsubscribe: () => void;
-  private readonly expanded = new Set<string>();
   private readonly connectedFiles: Set<string>;
-  private markdown = new Component();
+  private opened?: OpenNote;
+  private answer?: Component;
   private rows: PreviewRow[] = [];
   private pending = new Set<string>();
   private changedChoices = new Set<string>();
   private refreshAll = true;
   private busy = false;
+  private planReady = false;
   private saving = false;
   private closed = false;
 
@@ -109,7 +132,6 @@ export class SourceEnrollment {
     const requests = [...this.requests, ...candidates];
     this.preview = section ? study.preview(section.id, requests, source?.id) : study.previewNewSection(requests);
     this.excludeCandidates(candidates);
-    this.markdown.load();
     const heading = root.createEl("h2", { text: t(!section ? "newSection" : replaceSource ? "reconnectSource"
       : source ? "configureSource" : "connectNotes"), attr: { tabindex: "-1" } });
     if (!section) {
@@ -118,10 +140,34 @@ export class SourceEnrollment {
       this.name.oninput = () => this.updateConfirm();
     } else root.createEl("p", { cls: "study-cards-section-context", text: section.name });
 
-    if (!source) {
-      this.search = root.createEl("input", { type: "search", placeholder: t("findNote"),
-        attr: { "aria-label": t("findNote") } });
-      this.search.oninput = () => { this.draw(); this.list.scrollTop = 0; };
+    if (!source || replaceSource) {
+      const tools = root.createDiv({ cls: "study-cards-controls study-cards-enrollment-tools" });
+      if (!source) {
+        const filter = () => { this.draw(); this.list.scrollTop = 0; };
+        this.search = tools.createEl("input", { type: "search", placeholder: t("findNote"),
+          attr: { "aria-label": t("findNote") } });
+        this.search.oninput = filter;
+        this.folderFilter = tools.createEl("select", { attr: { "aria-label": t("filterNotesByFolder") } });
+        this.folderFilter.onchange = filter;
+      }
+      const add = tools.createEl("button", { text: t(replaceSource ? "chooseNewPath" : "findFolder") });
+      add.onclick = () => {
+        if (this.saving) return;
+        picker(app, source?.kind ?? "folder", (request) => {
+          if (this.closed || this.saving) return;
+          if (source) this.requests.splice(0, 1, { ...source, ...request });
+          else if (!this.requests.some(({ kind, path }) => kind === request.kind && path === request.path)) this.requests.push(request);
+          this.refreshAll = true;
+          void this.refresh();
+        });
+      };
+      if (!source) {
+        const help = root.createEl("details", { cls: "study-cards-enrollment-help" });
+        help.createEl("summary", { text: t("howNotesBecomeCards") });
+        const body = help.createDiv();
+        renderEnrollmentExamples(body);
+        body.createEl("p", { text: t("headingBoundaries") });
+      }
     }
     this.list = root.createDiv({ cls: "study-cards-enrollment-notes", attr: { tabindex: "0", role: "region",
       "aria-label": t("notes") } });
@@ -134,22 +180,13 @@ export class SourceEnrollment {
     this.confirm.onclick = () => { void this.submit(); };
     this.cancel = actions.createEl("button", { text: t("cancel"), cls: "study-cards-quiet-button" });
     this.cancel.onclick = options.onCancel;
-    if (!source || replaceSource) {
-      const add = root.createEl("button", { cls: "study-cards-quiet-button", text: t(replaceSource ? "chooseNewPath" : "findFolder") });
-      add.onclick = () => {
-        if (this.saving) return;
-        picker(app, source?.kind ?? "folder", (request) => {
-          if (this.closed || this.saving) return;
-          if (source) this.requests.splice(0, 1, { ...source, ...request });
-          else if (!this.requests.some(({ kind, path }) => kind === request.kind && path === request.path)) this.requests.push(request);
-          this.refreshAll = true;
-          void this.refresh();
-        });
-      };
-    }
     this.unsubscribe = watch(({ path, oldPath }) => {
       if (oldPath) {
         this.preview.rename(oldPath, path);
+        if (this.opened) {
+          this.opened.path = remapPath(this.opened.path, oldPath, path);
+          this.opened.sourcePath = remapPath(this.opened.sourcePath, oldPath, path);
+        }
         for (const connected of [...this.connectedFiles]) {
           const moved = remapPath(connected, oldPath, path);
           if (moved === connected) continue;
@@ -171,7 +208,12 @@ export class SourceEnrollment {
   close() {
     this.closed = true;
     this.unsubscribe();
-    this.markdown.unload();
+    this.clearAnswer();
+  }
+
+  private clearAnswer() {
+    this.answer?.unload();
+    this.answer = undefined;
   }
 
   private suggestName() {
@@ -221,9 +263,17 @@ export class SourceEnrollment {
       if (paths.size && JSON.stringify(selected.filter(inPaths)) !== JSON.stringify(rows.filter((row) => row.checked && inPaths(row)))) {
         this.feedback.setText(t("confirmChangedSources", { paths: [...paths].join(", ") }));
       }
+      if (refreshAll && !this.rows.length) {
+        const first = rows.find((row) => row.checked && (row.needsFormat || this.options.source?.kind === "file"));
+        if (first) this.openNote(first, this.preview.sources[first.source]!);
+      }
       this.rows = rows;
+      this.planReady = true;
+      this.updateFolderFilter();
       this.draw();
     } catch (error) {
+      if (this.closed) return;
+      this.planReady = false;
       this.rows = [];
       this.feedback.setText(message(error));
       this.draw();
@@ -241,14 +291,25 @@ export class SourceEnrollment {
     void this.refresh();
   }
 
+  private updateFolderFilter() {
+    const filter = this.folderFilter;
+    if (!filter) return;
+    const selected = filter.value;
+    const paths = [...new Set(this.rows.map(({ path }) => noteFolder(path)))].sort((a, b) => a.localeCompare(b));
+    filter.empty();
+    filter.createEl("option", { value: "", text: t("allFolders") });
+    for (const path of paths) filter.createEl("option", { value: path || "/", text: pathName(path) });
+    filter.value = selected && paths.includes(selected === "/" ? "" : selected) ? selected : "";
+  }
+
   private draw() {
     const focused = this.list.querySelector<HTMLElement>(":focus")?.dataset.focus;
     const scroll = this.list.scrollTop;
-    this.markdown.unload();
-    this.markdown = new Component();
-    this.markdown.load();
+    this.clearAnswer();
     this.list.empty();
     const query = this.search?.value.trim().toLocaleLowerCase() ?? "";
+    const folder = this.folderFilter?.value;
+    const matches = (path: string) => path.toLocaleLowerCase().includes(query) && (!folder || (noteFolder(path) || "/") === folder);
     const groups = new Map<number, PreviewRow[]>();
     for (const row of this.rows) {
       const items = groups.get(row.source) ?? [];
@@ -258,8 +319,8 @@ export class SourceEnrollment {
     this.preview.sources.forEach((request, index) => {
       const rows = groups.get(index) ?? [];
       if (request.kind === "folder") {
-        this.drawFolder(request, rows, index);
-      } else if (request.path.toLocaleLowerCase().includes(query)) {
+        this.drawFolder(request, rows.filter(({ path }) => matches(path)), index);
+      } else if (matches(request.path)) {
         for (const row of rows) this.drawNote(this.list, row, request);
       }
     });
@@ -289,7 +350,8 @@ export class SourceEnrollment {
       this.edit();
     };
     formatFields(group, source.format ?? single, (format) => this.changeFormat(source, format));
-    if (!rows.length) group.createEl("p", { text: t("folderWithoutNotes") });
+    if (!rows.length) group.createEl("p", { text: t(this.search?.value.trim() || this.folderFilter?.value
+      ? "noMatchingNotes" : "folderWithoutNotes") });
     for (const row of rows) this.drawNote(group, row, source);
   }
 
@@ -297,60 +359,147 @@ export class SourceEnrollment {
     const item = root.createDiv({ cls: "study-cards-enrollment-note" });
     const summary = item.createDiv({ cls: "study-cards-enrollment-row" });
     const label = summary.createEl("label");
-    const key = `${source.kind}:${source.path}:${row.path}`;
+    const key = JSON.stringify([source.kind, source.path, row.path]);
+    const opened = this.opened;
+    const isOpen = opened?.kind === source.kind && opened.sourcePath === source.path && opened.path === row.path;
     const check = label.createEl("input", { type: "checkbox", attr: { "data-focus": key } });
     check.checked = row.checked;
     check.onchange = () => {
       this.preview.choose(row.source, row.path, { checked: check.checked });
+      if (check.checked) this.openNote(row, source);
+      else if (isOpen) this.opened = undefined;
       this.edit(row.path);
     };
-    const caption = label.createSpan();
-    caption.createSpan({ text: row.path });
-    caption.createEl("small", { text: t("sectionCardCount", { count: row.cards.length }) });
-    const expand = summary.createEl("button", { text: t("preview"), cls: "study-cards-quiet-button",
-      attr: { "aria-label": t("previewNamedNote", { path: row.path }), "data-focus": "preview:" + key } });
-    const detail = item.createDiv({ cls: "study-cards-enrollment-preview" });
-    let loaded = false;
-    const show = (visible: boolean) => {
-      if (visible && !loaded) {
-        loaded = true;
-        this.drawPreview(detail, row, source);
-      }
-      detail.hidden = !visible;
-      expand.setAttribute("aria-expanded", String(visible));
-    };
-    show(this.expanded.has(key));
+    label.createSpan({ text: row.path });
+    if (!row.checked) return;
+    const caption = row.cards.length ? `${formatName(row.format)} · ${t("sectionCardCount", { count: row.cards.length })}` : t("configure");
+    const expand = summary.createEl("button", { text: caption, cls: "study-cards-quiet-button",
+      attr: { "aria-expanded": String(isOpen), "aria-label": t("noteSettings", { path: row.path, status: caption }),
+        "data-focus": "settings:" + key } });
     expand.onclick = () => {
-      if (this.expanded.has(key)) this.expanded.delete(key);
-      else this.expanded.add(key);
-      show(this.expanded.has(key));
+      if (isOpen) this.opened = undefined;
+      else this.openNote(row, source);
+      this.draw();
     };
-    if (row.checked && (row.dirty || row.error || row.needsFormat || !row.cards.length)) {
+    if (row.dirty || row.error || row.unavailableLevel !== undefined) {
       item.createEl("p", { cls: "study-cards-enrollment-warning",
-        text: row.error ?? (row.dirty ? t("waitingForEditor") : row.needsFormat ? t("selectFormatInPreview") : t("noNoteQuestions")) });
+        text: row.error ?? (row.dirty ? t("waitingForEditor")
+          : t("unavailableHeadingLevel", { heading: "#".repeat(row.unavailableLevel!) })) });
     }
+    if (isOpen && !row.error) this.drawSettings(item, row, opened, key);
   }
 
-  private drawPreview(root: HTMLElement, row: PreviewRow, source: SourceRequest) {
+  private openNote(row: PreviewRow, source: SourceRequest) {
+    this.opened = { kind: source.kind, sourcePath: source.path, path: row.path, preview: false, question: 0 };
+  }
+
+  private drawSettings(item: HTMLElement, row: PreviewRow, opened: OpenNote, key: string) {
+    const root = item.createDiv({ cls: "study-cards-enrollment-settings" });
     if (row.needsFormat) {
-      const select = root.createEl("label", { text: t("chooseFormatPrompt") + " " }).createEl("select");
-      select.createEl("option", { value: "", text: t("chooseFormat") }).disabled = true;
-      row.formats.forEach((format, index) => select.createEl("option", { value: String(index), text: formatName(format) }));
-      select.onchange = () => {
-        this.preview.choose(row.source, row.path, { format: row.formats[Number(select.value)] });
-        this.edit(row.path);
-      };
-    } else if (source.kind === "file") {
-      formatFields(root, source.format ?? row.format, (format) => this.changeFormat(source, format));
+      root.createEl("p", { text: t("chooseNoteFormat") });
     }
-    for (const { question, answer, firstLine, lastLine } of row.cards) {
-      const card = root.createDiv({ cls: "study-cards-enrollment-card" });
+    const formats = root.createDiv({ cls: "study-cards-controls", attr: { role: "group", "aria-label": t("sourceFormat") } });
+    const selected = !row.needsFormat;
+    const whole = selected && row.format.mode === "single";
+    const choose = (format: Format) => {
+      if (selected && sameFormat(row.format, format)) return;
+      opened.question = 0;
+      this.preview.choose(row.source, row.path, { format });
+      this.edit(row.path);
+    };
+    const option = (text: string, choice: Format, active: boolean, id: string) => {
+      const control = formats.createEl("button", { text, cls: active ? "mod-cta" : undefined,
+        attr: { "aria-pressed": String(active), "data-focus": id + ":" + key } });
+      control.onclick = () => choose(choice);
+    };
+    option(t("wholeNote"), whole ? row.format : single, whole, "whole");
+    const headings = [...row.headingOptions];
+    // A saved H1 collection with one remaining card keeps its existing format and identity.
+    if (selected && row.format.mode === "collection" && row.format.level === 1 && !headings.some(({ level }) => level === 1)) {
+      headings.unshift({ level: 1, count: row.cards.length });
+    }
+    for (const { level, count } of headings) {
+      const choice = { mode: "collection", level } as const;
+      option(`${formatName(choice)} · ${t("sectionCardCount", { count })}`, choice,
+        selected && sameFormat(row.format, choice), "level-" + level);
+    }
+    if (whole && row.hasFirstHeading) {
+      const label = root.createEl("label", { cls: "study-cards-source-choice" });
+      const filename = label.createEl("input", { type: "checkbox", attr: { "data-focus": "filename:" + key } });
+      filename.checked = row.format.mode === "single" && row.format.question === "filename";
+      label.appendText(t("useFilenameQuestion"));
+      filename.onchange = () => choose({ mode: "single", question: filename.checked ? "filename" : "heading" });
+    }
+    if (!row.cards.length) return;
+    const toggle = root.createEl("button", { text: t("preview"), cls: "study-cards-quiet-button",
+      attr: { "aria-expanded": String(opened.preview), "data-focus": "preview:" + key } });
+    const preview = root.createDiv({ cls: "study-cards-enrollment-preview" });
+    const show = () => {
+      toggle.setAttribute("aria-expanded", String(opened.preview));
+      preview.hidden = !opened.preview;
+      if (opened.preview) this.drawPreview(preview, row, opened, key);
+      else {
+        this.clearAnswer();
+        preview.empty();
+      }
+    };
+    toggle.onclick = () => {
+      opened.preview = !opened.preview;
+      show();
+    };
+    show();
+  }
+
+  private drawPreview(root: HTMLElement, row: PreviewRow, opened: OpenNote, key: string) {
+    const picker = row.cards.length > 1
+      ? root.createEl("label", { cls: "study-cards-preview-question", text: t("previewQuestion") })
+        .createEl("select", { attr: { "data-focus": "question:" + key } })
+      : undefined;
+    const card = root.createDiv({ cls: "study-cards-enrollment-card" });
+    const showAnswer = () => {
+      this.clearAnswer();
+      card.empty();
+      const { question, answer, firstLine, lastLine } = row.cards[opened.question] ?? row.cards[0]!;
       card.createEl("strong", { text: question });
       card.createEl("small", { text: t("previewLines", { first: firstLine, last: lastLine }) });
-      const body = card.createDiv({ cls: "study-cards-markdown" });
-      void MarkdownRenderer.render(this.app, answer, body, row.path, this.markdown)
-        .catch(() => { body.setText(answer); });
+      const body = card.createDiv();
+      const owner = this.answer = new Component();
+      owner.load();
+      this.registerPreviewLinks(body, row.path, owner);
+      void renderCardMarkdown(this.app, body, answer, row.path, owner).catch(() => {
+        if (this.answer === owner) body.setText(answer);
+      });
+    };
+    opened.question = Math.min(opened.question, row.cards.length - 1);
+    if (picker) {
+      row.cards.forEach(({ question }, index) => picker.createEl("option", { value: String(index), text: question }));
+      picker.value = String(opened.question);
+      picker.onchange = () => {
+        opened.question = Number(picker.value);
+        showAnswer();
+      };
     }
+    showAnswer();
+  }
+
+  private registerPreviewLinks(body: HTMLElement, sourcePath: string, owner: Component) {
+    const hoverParent: HoverParent = { hoverPopover: null };
+    const linkTarget = (event: MouseEvent) =>
+      (event.target as Element | null)?.closest?.<HTMLElement>("a.internal-link[data-href]");
+    owner.registerDomEvent(body, "click", (event) => {
+      const linktext = linkTarget(event)?.dataset.href;
+      if (!linktext || event.defaultPrevented) return;
+      event.preventDefault();
+      void this.app.workspace.openLinkText(linktext, sourcePath, "tab").catch((error) => new Notice(message(error)));
+    });
+    owner.registerDomEvent(body, "mouseover", (event) => {
+      const targetEl = linkTarget(event);
+      const linktext = targetEl?.dataset.href;
+      if (linktext && !targetEl?.contains(event.relatedTarget as Node | null)) {
+        this.app.workspace.trigger("hover-link", { event, source: "preview", hoverParent, targetEl, linktext, sourcePath });
+      }
+    });
+    owner.register(() => hoverParent.hoverPopover?.unload());
   }
 
   private changeFormat(source: SourceRequest, format: Format) {
@@ -363,15 +512,14 @@ export class SourceEnrollment {
   }
 
   private updateConfirm() {
-    const checked = this.rows.filter(({ checked }) => checked);
-    const counts = new Map(checked.map(({ path, cards }) => [path, cards.length]));
-    const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-    this.count.setText(t("enrollmentSelectionCount", { cards: t("sectionCardCount", { count: total }) }));
+    const { cards, needsFormat, blocked } = this.preview.selection;
+    const count = t("enrollmentSelectionCount", { cards: t("sectionCardCount", { count: cards }) });
+    this.count.setText(needsFormat ? `${count} · ${t("notesToConfigure", { count: needsFormat })}` : count);
     const folders = this.requests.filter(({ kind }) => kind === "folder");
-    this.confirm.disabled = this.busy || this.saving || Boolean(this.name && !this.name.value.trim())
-      || checked.some((row) => row.dirty || row.error || row.needsFormat || !row.cards.length)
+    this.confirm.disabled = !this.planReady || this.busy || this.saving || Boolean(this.name && !this.name.value.trim())
+      || blocked
       || folders.some(({ path }) => path !== "" && !(this.app.vault.getAbstractFileByPath(path) instanceof TFolder))
-      || (!total && !folders.length);
+      || (!cards && !folders.length);
     this.cancel.disabled = this.saving;
     this.list.inert = this.saving;
   }

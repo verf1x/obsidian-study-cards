@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Modal, Notice, setIcon, type App, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, Modal, Notice, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 import { FreeCheckView } from "./free-check-view";
 import { reviewDue } from "./interval-queue";
 import { IntervalView } from "./interval-view";
@@ -6,7 +6,8 @@ import { masteryLabels, t } from "./localization";
 import type { Status } from "./markdown";
 import { CheckPrompt } from "./free-check-modals";
 import { renderPaneAction } from "./pane-action";
-import { CreateCardModal, ManageSourceModal, message, SourceEnrollment, type WatchVault } from "./source-modals";
+import { renderCardMarkdown } from "./render-markdown";
+import { CreateCardModal, ManageSourceModal, message, renderEnrollmentExamples, SourceEnrollment, type WatchVault } from "./source-modals";
 import { renderStudyStorage } from "./study-storage-view";
 import type { Card, SourceRequest, StudyCards } from "./study-cards";
 import type { Section } from "./study-state";
@@ -58,6 +59,7 @@ export class StudyView extends ItemView {
   async onOpen() {
     this.isOpen = true;
     this.pane = "practice";
+    this.freeCheck.resetHistoryFilter();
     this.unsubscribe = this.study.subscribe(() => this.render());
     this.render();
   }
@@ -135,7 +137,7 @@ export class StudyView extends ItemView {
     const section = this.study.sections.find(({ id }) => id === this.study.activeSection);
     this.renderNavigation(root, this.pane, section);
     if (this.pane === "history") {
-      this.freeCheck.renderHistory(root, section);
+      this.freeCheck.renderHistory(root);
     } else if (!section) {
       const firstUse = root.createDiv({ cls: "study-cards-first-use" });
       firstUse.createEl("h2", { text: t("startWithYourNotes") });
@@ -143,6 +145,7 @@ export class StudyView extends ItemView {
       const connect = firstUse.createEl("button", { text: t("connectNotes"), cls: "mod-cta", attr: { "data-focus": "connect" } });
       connect.disabled = Boolean(problem) || saving;
       connect.onclick = () => this.connectNotes();
+      renderEnrollmentExamples(firstUse);
     } else {
       const toolbar = root.createDiv({ cls: "study-cards-section-controls" });
       const title = toolbar.createDiv({ cls: "study-cards-section-title" });
@@ -181,7 +184,7 @@ export class StudyView extends ItemView {
       if (active === pane && !this.freeCheck.settingUp) button.setAttribute("aria-current", "page");
       button.onclick = () => this.showPane(pane);
     }
-    if (!this.freeCheck.settingUp) this.renderSectionPicker(nav, section);
+    if (!this.freeCheck.settingUp && active !== "history") this.renderSectionPicker(nav, section);
   }
 
   private renderSectionPicker(nav: HTMLElement, section?: Section) {
@@ -217,6 +220,8 @@ export class StudyView extends ItemView {
     const blocked = Boolean(problem) || saving;
     add(t("newSection"), () => this.showEnrollment([])).disabled = blocked;
     if (section) {
+      add(t("renameSectionMenu"), () =>
+        new RenameSectionModal(this.app, this.study, section, () => this.focusPaneControl("section")).open()).disabled = blocked;
       const remove = add(t("deleteSectionMenu"), () => this.confirmSectionDeletion(section));
       remove.disabled = blocked;
       remove.addClass("study-cards-danger");
@@ -456,22 +461,8 @@ export class StudyView extends ItemView {
   }
 
   protected async renderMarkdown(root: HTMLElement, card: Card) {
-    root.addClass("markdown-rendered", "study-cards-markdown");
     try {
-      await MarkdownRenderer.render(this.app, card.answer, root, card.path, this.answers);
-      const tables = [...root.querySelectorAll("table")];
-      for (const [index, table] of tables.entries()) {
-        const parent = table.parentElement;
-        const scroll = parent?.matches(".table-wrapper, .study-cards-table-scroll")
-          ? parent : root.ownerDocument.createElement("div");
-        if (scroll !== parent) {
-          table.before(scroll);
-          scroll.append(table);
-        }
-        scroll.addClass("study-cards-table-scroll");
-        const label = table.caption?.textContent?.trim() || (tables.length > 1 ? t("numberedTable", { number: index + 1 }) : t("table"));
-        scroll.setAttrs({ tabindex: "0", role: "region", "aria-label": label });
-      }
+      await renderCardMarkdown(this.app, root, card.answer, card.path, this.answers);
     } catch (error) {
       new Notice(message(error));
     }
@@ -480,6 +471,53 @@ export class StudyView extends ItemView {
   protected perform(promise: Promise<unknown>) {
     void promise.catch((error) => new Notice(message(error)));
   }
+}
+
+class RenameSectionModal extends Modal {
+  private saving = false;
+
+  constructor(app: App, private readonly study: StudyCards, private readonly section: Section,
+    private readonly restoreFocus: () => void) { super(app); }
+
+  onOpen() {
+    this.setTitle(t("renameSection"));
+    const form = this.contentEl.createEl("form", { cls: "study-cards-form study-cards-rename-section" });
+    const name = form.createEl("label", { text: t("sectionName") }).createEl("input", { type: "text", value: this.section.name });
+    name.required = true;
+    const feedback = form.createEl("p", { attr: { role: "status" } });
+    const actions = form.createDiv({ cls: "study-cards-controls" });
+    const save = actions.createEl("button", { type: "submit", cls: "mod-cta", text: t("save") });
+    const cancel = actions.createEl("button", { type: "button", text: t("cancel") });
+    const update = () => {
+      save.disabled = this.saving || !name.value.trim();
+      cancel.disabled = name.disabled = this.saving;
+    };
+    name.oninput = update;
+    cancel.onclick = () => this.close();
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      if (save.disabled) return;
+      this.saving = true;
+      feedback.setText("");
+      update();
+      try {
+        await this.study.renameSection(this.section.id, name.value);
+        super.close();
+      } catch (error) {
+        feedback.setText(message(error));
+      } finally {
+        this.saving = false;
+        update();
+      }
+    };
+    update();
+    name.focus();
+    name.select();
+  }
+
+  close() { if (!this.saving) super.close(); }
+
+  onClose() { this.restoreFocus(); }
 }
 
 class DuplicateModal extends Modal {

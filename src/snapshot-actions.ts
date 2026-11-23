@@ -1,6 +1,7 @@
 // The stored captions are part of the existing snapshot format.
 const actions = {
   addSection: ["Добавление учебного раздела", "Study section added"],
+  renameSection: ["Переименование учебного раздела", "Study section renamed"],
   removeSection: ["Удаление учебного раздела", "Study section deleted"],
   disconnectSource: ["Отключение источника", "Source disconnected"],
   configureNoteQuestions: ["Изменение выбора вопросов", "Question selection changed"],
