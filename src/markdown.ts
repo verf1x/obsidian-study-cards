@@ -104,20 +104,42 @@ export class MarkdownNote {
 
   format(fallback: Format): Format {
     const mode = this.properties?.get("qcards_mode");
-    const level = this.properties?.get("qcards_heading_level");
-    const question = this.properties?.get("qcards_question");
     if (mode === "single" || (mode !== "collection" && fallback.mode === "single")) {
       return {
         mode: "single",
-        question: question === "filename" || question === "heading" ? question
-          : fallback.mode === "single" ? fallback.question : "heading",
+        question: this.savedQuestion() ?? (fallback.mode === "single" ? fallback.question : "heading"),
       };
     }
     return {
       mode: "collection",
-      level: typeof level === "number" && Number.isInteger(level) && level >= 1 && level <= 6 ? level
-        : fallback.mode === "collection" ? fallback.level : 2,
+      level: this.savedHeadingLevel() ?? (fallback.mode === "collection" ? fallback.level : 2),
     };
+  }
+
+  get hasSavedFormat() {
+    const mode = this.properties?.get("qcards_mode");
+    return mode === "single" ? this.savedQuestion() !== undefined
+      : mode === "collection" && this.savedHeadingLevel() !== undefined;
+  }
+
+  get hasFormatProperties() {
+    return ["qcards_mode", "qcards_question", "qcards_heading_level"].some((key) => this.properties?.has(key));
+  }
+
+  private savedQuestion() {
+    const question = this.properties?.get("qcards_question");
+    return question === "heading" || question === "filename" ? question : undefined;
+  }
+
+  private savedHeadingLevel() {
+    const level = this.properties?.get("qcards_heading_level");
+    return typeof level === "number" && Number.isInteger(level) && level >= 1 && level <= 6 ? level : undefined;
+  }
+
+  headingCounts() {
+    const counts = new Map<number, number>();
+    for (const { level } of this.headings()) counts.set(level, (counts.get(level) ?? 0) + 1);
+    return counts;
   }
 
   private headings() {

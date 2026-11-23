@@ -6,7 +6,7 @@ import { localization, t } from "./localization";
 import { renderPracticeRow } from "./pane-action";
 import { message } from "./source-modals";
 import type { Card, StudyCards } from "./study-cards";
-import type { FreeGrade, FreeResult, FreeSession, Section } from "./study-state";
+import type { FreeGrade, FreeResult, FreeSession } from "./study-state";
 
 type Screen = { mode: "setup"; form: FreeCheckSetup }
   | { mode: "check"; id: string }
@@ -23,7 +23,7 @@ export class FreeCheckView {
   private answer?: { id: string; card: CheckCard; updated: boolean };
   private answerScroll = 0;
   private saving = false;
-  private currentHistoryOnly = false;
+  private historySectionId: string | undefined;
 
   constructor(private readonly app: App, private readonly study: StudyCards, private readonly root: HTMLElement,
     private readonly render: () => void, private readonly renderMarkdown: (root: HTMLElement, card: Card) => Promise<void>,
@@ -31,6 +31,8 @@ export class FreeCheckView {
     private readonly backToHistory: () => void) {}
 
   close() { this.screen = undefined; }
+
+  resetHistoryFilter() { this.historySectionId = undefined; }
 
   resume(id: string) { this.showCheck(id); }
 
@@ -85,23 +87,34 @@ export class FreeCheckView {
     }
   }
 
-  renderHistory(root: HTMLElement, section?: Section) {
+  renderHistory(root: HTMLElement) {
     const { results } = this.study.freeChecks;
+    const sections = this.study.sections;
+    if (!sections.some(({ id }) => id === this.historySectionId)) this.resetHistoryFilter();
     root.createEl("h2", { text: t("checkHistory") });
-    const filters = root.createDiv({ cls: "study-cards-controls study-cards-history-filters" });
-    const currentOnly = this.currentHistoryOnly && Boolean(section);
-    const filter = (text: string, current: boolean) => {
-      const key = current ? "history-current" : "history-all";
-      const button = filters.createEl("button", { text, attr: { "aria-pressed": String(currentOnly === current), "data-focus": key } });
-      button.onclick = () => {
-        this.currentHistoryOnly = current;
-        this.render();
-        this.focus(`[data-focus="${key}"]`);
-      };
+    const filter = root.createEl("select", { attr: { "data-focus": "history-section", "aria-label": t("filterHistorySection") } });
+    filter.createEl("option", { value: "", text: t("allSections") });
+    const options = sections.map(({ id, name, sources }) => ({
+      id, name, context: sources[0] ? sources[0].path || t("vaultRoot") : undefined,
+    }));
+    for (const { id, name, context } of options) {
+      const matching = options.filter((option) => option.name === name);
+      const matchingContext = matching.filter((option) => option.context === context);
+      const label = [name];
+      if (matching.length > 1) {
+        if (context) label.push(context);
+        if (!context || matchingContext.length > 1) {
+          label.push(t("historySectionNumber", { number: matching.findIndex((option) => option.id === id) + 1 }));
+        }
+      }
+      filter.createEl("option", { value: id, text: label.join(" · ") });
+    }
+    filter.value = this.historySectionId ?? "";
+    filter.onchange = () => {
+      this.historySectionId = filter.value || undefined;
+      this.render();
     };
-    filter(t("allSections"), false);
-    if (section) filter(section.name, true);
-    const history = results.filter((result) => !currentOnly || result.sectionId === section?.id).reverse();
+    const history = results.filter((result) => !this.historySectionId || result.sectionId === this.historySectionId).reverse();
     if (!history.length) root.createEl("p", { text: t("noCheckResults") });
     for (const result of history) {
       const { correct, graded } = checkScore(result, new Set());
@@ -391,7 +404,6 @@ export class FreeCheckView {
     const actions = report.createDiv({ cls: "study-cards-controls study-cards-report-actions" });
     actions.createEl("button", { text: t("history") }).onclick = () => {
       this.screen = undefined;
-      this.currentHistoryOnly = false;
       this.backToHistory();
     };
     actions.createEl("button", { text: t("backToPractice"), cls: "study-cards-quiet-button" }).onclick = () => this.practice();
